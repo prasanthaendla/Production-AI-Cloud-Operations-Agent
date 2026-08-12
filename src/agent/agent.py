@@ -1,12 +1,20 @@
 """
 AI Cloud Operations Agent
 
-Phase 1:
-Simple tool-calling agent using Cohere.
+Phase 2:
+Multi-step tool-calling agent using Cohere.
 
-This implementation intentionally avoids
-LangGraph so that the underlying agent
-loop is understood first.
+The agent can:
+1. Understand the user's question.
+2. Select one or more tools.
+3. Execute the requested tools.
+4. Send tool results back to the LLM.
+5. Allow the LLM to request additional tools.
+6. Continue until the LLM produces a final answer.
+7. Stop after a maximum number of iterations.
+
+This implementation intentionally avoids LangGraph
+so that the underlying agent loop is understood first.
 """
 
 import json
@@ -21,8 +29,17 @@ from src.tools.tool_executor import (
 
 class CloudOperationsAgent:
     """
-    Simple tool-calling agent.
+    Multi-step AI Cloud Operations Agent.
+
+    The agent uses an LLM to dynamically select and
+    execute cloud operations tools.
     """
+
+    # Maximum number of LLM/tool interaction cycles.
+    #
+    # This prevents the agent from entering an
+    # infinite tool-calling loop.
+    MAX_ITERATIONS = 5
 
     def __init__(self):
         self.llm = CohereClient()
@@ -31,6 +48,11 @@ class CloudOperationsAgent:
         """
         Process a user question using the LLM
         and available tools.
+
+        The agent continues calling tools until:
+
+        1. The LLM returns a final answer, or
+        2. MAX_ITERATIONS is reached.
         """
 
         messages = [
@@ -42,7 +64,11 @@ class CloudOperationsAgent:
                     "using the available tools. "
                     "Do not invent infrastructure metrics. "
                     "Use tools when factual infrastructure "
-                    "information is required."
+                    "information is required. "
+                    "When investigating an incident, use "
+                    "additional tools when the available "
+                    "evidence is not sufficient to answer "
+                    "the user's question confidently."
                 ),
             },
             {
@@ -52,94 +78,127 @@ class CloudOperationsAgent:
         ]
 
         # --------------------------------------------------
-        # Step 1: Ask the LLM whether a tool is required
+        # Multi-step Agent Loop
         # --------------------------------------------------
 
-        response = self.llm.chat(
-            messages=messages,
-            tools=TOOLS,
-        )
-
-        # --------------------------------------------------
-        # Step 2: If no tool is required, return the answer
-        # --------------------------------------------------
-
-        if not response.message.tool_calls:
-
-            return response.message.content[0].text
-
-        # --------------------------------------------------
-        # Step 3: Add the assistant tool-call message
-        # --------------------------------------------------
-
-        messages.append(response.message)
-
-        # --------------------------------------------------
-        # Step 4: Execute each requested tool
-        # --------------------------------------------------
-
-        for tool_call in response.message.tool_calls:
-
-            tool_name = tool_call.function.name
-
-            arguments = parse_tool_arguments(
-                tool_call.function.arguments
-            )
+        for iteration in range(1, self.MAX_ITERATIONS + 1):
 
             print(
-                f"\n[Agent Tool Call] "
-                f"{tool_name}"
-            )
-
-            print(
-                f"[Arguments] "
-                f"{json.dumps(arguments)}"
-            )
-
-            # Execute the actual Python function
-            result = execute_tool(
-                tool_name,
-                arguments,
-            )
-
-            print(
-                f"[Tool Result] "
-                f"{json.dumps(result)}"
+                f"\n[Agent Iteration] {iteration}"
             )
 
             # --------------------------------------------------
-            # Send the tool result back to Cohere
-            #
-            # Cohere V2 expects tool results as supported
-            # content blocks. We use a document block so the
-            # model receives structured tool information.
+            # Ask the LLM what to do next
             # --------------------------------------------------
 
-            tool_content = [
-                {
-                    "type": "document",
-                    "document": {
-                        "data": json.dumps(result)
-                    },
-                }
-            ]
-
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": tool_content,
-                }
+            response = self.llm.chat(
+                messages=messages,
+                tools=TOOLS,
             )
 
+            # --------------------------------------------------
+            # Check whether the LLM wants to call a tool
+            # --------------------------------------------------
+
+            tool_calls = response.message.tool_calls
+
+            # --------------------------------------------------
+            # No tool call means the LLM has enough information
+            # and is ready to provide the final answer.
+            # --------------------------------------------------
+
+            if not tool_calls:
+
+                return response.message.content[0].text
+
+            # --------------------------------------------------
+            # Add the assistant's tool-call message to the
+            # conversation history.
+            # --------------------------------------------------
+
+            messages.append(response.message)
+
+            # --------------------------------------------------
+            # Execute all tools requested by the LLM.
+            # --------------------------------------------------
+
+            for tool_call in tool_calls:
+
+                tool_name = tool_call.function.name
+
+                arguments = parse_tool_arguments(
+                    tool_call.function.arguments
+                )
+
+                print(
+                    f"\n[Agent Tool Call] "
+                    f"{tool_name}"
+                )
+
+                print(
+                    f"[Arguments] "
+                    f"{json.dumps(arguments)}"
+                )
+
+                # --------------------------------------------------
+                # Execute the actual Python tool.
+                # --------------------------------------------------
+
+                result = execute_tool(
+                    tool_name,
+                    arguments,
+                )
+
+                print(
+                    f"[Tool Result] "
+                    f"{json.dumps(result)}"
+                )
+
+                # --------------------------------------------------
+                # Convert the tool result into a Cohere-supported
+                # tool-result content block.
+                # --------------------------------------------------
+
+                tool_content = [
+                    {
+                        "type": "document",
+                        "document": {
+                            "data": json.dumps(result)
+                        },
+                    }
+                ]
+
+                # --------------------------------------------------
+                # Add the tool result to the conversation.
+                #
+                # The next LLM iteration will receive:
+                #
+                # User question
+                # Assistant tool call
+                # Tool result
+                #
+                # and can decide whether another tool is required.
+                # --------------------------------------------------
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_content,
+                    }
+                )
+
         # --------------------------------------------------
-        # Step 5: Ask the LLM to generate the final answer
-        # using the tool results
+        # Safety Stop
+        #
+        # If the agent reaches MAX_ITERATIONS without
+        # producing a final answer, stop the loop instead
+        # of continuing indefinitely.
         # --------------------------------------------------
 
-        final_response = self.llm.chat(
-            messages=messages,
-            tools=TOOLS,
+        return (
+            "I was unable to complete the investigation "
+            "within the allowed number of tool-calling "
+            "iterations. Please try the question again "
+            "with more specific information."
         )
-
-        return final_response.message.content[0].text
