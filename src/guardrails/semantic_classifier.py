@@ -5,16 +5,15 @@ Uses Cohere embeddings to determine whether a user
 question belongs to the supported Cloud Operations
 domain.
 
-The classifier uses both positive and negative
-semantic domain prototypes.
+The classifier uses positive and negative semantic
+intent prototypes rather than maintaining a large
+keyword or question list.
 
-Positive prototypes describe Cloud Operations.
+Positive prototypes represent common Cloud Operations
+intents.
 
-Negative prototypes describe common domains that
-should remain outside the Cloud Operations Agent.
-
-The classifier does not maintain a list of individual
-keywords or questions.
+Negative prototypes represent domains that should remain
+outside the Cloud Operations Agent.
 """
 
 import math
@@ -29,7 +28,7 @@ class SemanticScopeClassifier:
 
     The classifier compares a user's question against:
 
-    1. Positive Cloud Operations prototypes.
+    1. Positive Cloud Operations intent prototypes.
     2. Negative out-of-scope prototypes.
 
     The final decision uses:
@@ -40,79 +39,110 @@ class SemanticScopeClassifier:
     """
 
     # ============================================================
-    # POSITIVE DOMAIN PROTOTYPES
+    # POSITIVE CLOUD OPERATIONS INTENT PROTOTYPES
     # ============================================================
 
     CLOUD_DOMAIN_PROTOTYPES = [
         (
             "cloud infrastructure",
             (
-                "Cloud infrastructure concepts including "
-                "AWS, Amazon Web Services, GCP, Google Cloud, "
-                "Microsoft Azure, EC2, virtual machines, "
-                "servers, compute resources, storage, "
-                "networking, VPCs, subnets, route tables, "
-                "load balancers, availability and "
-                "cloud infrastructure."
+                "Cloud infrastructure concepts including AWS, "
+                "Amazon Web Services, GCP, Google Cloud, Azure, "
+                "EC2, virtual machines, servers, compute resources, "
+                "storage, availability, infrastructure health and "
+                "cloud resource management."
+            ),
+        ),
+        (
+            "cloud instance health",
+            (
+                "Investigating the health and status of cloud "
+                "instances, EC2 instances, virtual machines and "
+                "production servers. Questions about unhealthy "
+                "instances, degraded instances, instance failures, "
+                "high CPU utilization, high memory utilization, "
+                "instance status, server health and infrastructure "
+                "health problems."
             ),
         ),
         (
             "cloud operations",
             (
-                "Cloud operations activities including "
-                "monitoring, observability, metrics, CPU, "
-                "memory, application health, infrastructure "
+                "Day-to-day cloud operations including monitoring, "
+                "observability, metrics, CPU utilization, memory "
+                "utilization, application health, infrastructure "
                 "health, logs, alerts, incidents, outages, "
-                "performance, latency, availability and "
-                "troubleshooting of cloud environments."
+                "performance, latency, availability and production "
+                "troubleshooting."
             ),
         ),
         (
             "cloud networking",
             (
-                "Cloud networking concepts including "
-                "VPCs, virtual networks, subnets, route "
-                "tables, routing, security groups, network "
-                "ACLs, load balancers, DNS, connectivity, "
-                "firewalls and network troubleshooting."
+                "Cloud networking concepts and operational problems "
+                "including VPCs, virtual networks, subnets, route "
+                "tables, routing, security groups, network ACLs, "
+                "load balancers, DNS, connectivity, firewalls and "
+                "network troubleshooting."
+            ),
+        ),
+        (
+            "application health",
+            (
+                "Investigating production applications running in "
+                "cloud environments. Questions about unhealthy "
+                "applications, application availability, application "
+                "errors, HTTP errors, timeouts, application "
+                "performance, service failures, connection problems, "
+                "logs and application troubleshooting."
             ),
         ),
         (
             "incident troubleshooting",
             (
-                "Troubleshooting cloud infrastructure and "
-                "production applications, investigating "
-                "incidents, analyzing logs, identifying "
-                "root causes, investigating failures, "
-                "timeouts, errors, degraded services, "
-                "unhealthy applications and outages."
+                "Investigating cloud production incidents and "
+                "infrastructure failures. Troubleshooting unhealthy "
+                "services, degraded systems, outages, errors, "
+                "timeouts, high resource utilization, application "
+                "failures, production incidents and identifying "
+                "possible root causes."
+            ),
+        ),
+        (
+            "cloud deployments",
+            (
+                "Cloud deployment and release operations including "
+                "deployment failures, recent deployments, release "
+                "versions, deployment status, release pipelines, "
+                "CI/CD systems, production releases and investigating "
+                "whether a recent deployment may be related to an "
+                "infrastructure or application incident."
+            ),
+        ),
+        (
+            "monitoring and observability",
+            (
+                "Cloud monitoring and observability including CPU "
+                "metrics, memory metrics, infrastructure metrics, "
+                "application metrics, logs, alerts, monitoring "
+                "systems, performance monitoring, health checks, "
+                "availability monitoring and production observability."
             ),
         ),
         (
             "devops and sre",
             (
-                "DevOps and SRE topics including deployments, "
-                "release pipelines, CI/CD, Terraform, "
-                "Ansible, Kubernetes, Docker, monitoring, "
-                "reliability, production operations and "
-                "site reliability engineering."
-            ),
-        ),
-        (
-            "cloud applications",
-            (
-                "Production applications running in cloud "
-                "environments, application availability, "
-                "application health, application errors, "
-                "application performance, service failures, "
-                "timeouts, HTTP errors, logs and operational "
-                "troubleshooting."
+                "DevOps and Site Reliability Engineering topics "
+                "including deployments, release pipelines, CI/CD, "
+                "Terraform, Ansible, Kubernetes, Docker, monitoring, "
+                "reliability, production operations, incident "
+                "response and site reliability engineering."
             ),
         ),
     ]
 
     # ============================================================
-    # NEGATIVE DOMAIN PROTOTYPES
+    # NEGATIVE OUT-OF-SCOPE DOMAIN PROTOTYPES
     # ============================================================
 
     OUT_OF_SCOPE_PROTOTYPES = [
@@ -120,57 +150,55 @@ class SemanticScopeClassifier:
             "general programming",
             (
                 "General programming and software development "
-                "questions including programming languages, "
-                "learning Java, Python programming, coding "
-                "syntax, algorithms, data structures and "
-                "general software development unrelated to "
-                "cloud operations."
+                "questions including programming languages, Java, "
+                "Python programming, coding syntax, algorithms, "
+                "data structures, programming tutorials and general "
+                "software development unrelated to cloud operations."
             ),
         ),
         (
             "general ai and machine learning",
             (
-                "General artificial intelligence, machine "
-                "learning, deep learning, generative AI, "
-                "large language models, neural networks and "
-                "AI concepts that are not specifically about "
-                "operating cloud infrastructure."
+                "General artificial intelligence, machine learning, "
+                "deep learning, generative AI, Agentic AI, AI agents, "
+                "large language models, neural networks and AI concepts "
+                "that are not specifically about operating cloud "
+                "infrastructure."
             ),
         ),
         (
             "database knowledge",
             (
-                "Database-specific knowledge and database "
-                "features including Oracle database versions, "
-                "Oracle 21c features, SQL concepts, database "
-                "architecture and database administration "
-                "questions that are not specifically about "
-                "cloud operations."
+                "Database-specific knowledge and database features "
+                "including Oracle database versions, Oracle 21c "
+                "features, SQL concepts, database architecture and "
+                "database administration questions that are not "
+                "specifically about cloud operations."
             ),
         ),
         (
             "general knowledge",
             (
-                "General knowledge questions including "
-                "geography, history, countries, capitals, "
-                "politics, science and other general "
-                "information unrelated to cloud operations."
+                "General knowledge questions including geography, "
+                "history, countries, capitals, politics, science and "
+                "other general information unrelated to cloud "
+                "infrastructure or cloud operations."
             ),
         ),
         (
             "education and exams",
             (
-                "Education and examination questions including "
-                "exam preparation, study plans, learning "
-                "subjects, school questions and educational "
-                "guidance unrelated to cloud operations."
+                "Education and examination questions including exam "
+                "preparation, study plans, learning subjects, school "
+                "questions, courses and educational guidance unrelated "
+                "to cloud operations."
             ),
         ),
         (
             "personal questions",
             (
                 "Personal questions about the user, their name, "
-                "identity, personal life, preferences or "
+                "identity, personal life, preferences, opinions or "
                 "private information."
             ),
         ),
@@ -178,9 +206,8 @@ class SemanticScopeClassifier:
             "entertainment and casual conversation",
             (
                 "Entertainment, jokes, poems, stories, casual "
-                "conversation and general social interaction "
-                "unrelated to cloud infrastructure or "
-                "cloud operations."
+                "conversation and general social interaction unrelated "
+                "to cloud infrastructure or cloud operations."
             ),
         ),
     ]
@@ -195,15 +222,15 @@ class SemanticScopeClassifier:
 
         Args:
             positive_threshold:
-                Minimum positive similarity required.
+                Minimum positive semantic similarity required.
 
             margin_threshold:
-                Minimum difference required between the
-                strongest positive and strongest negative
-                semantic matches.
+                Minimum difference required between the strongest
+                positive and strongest negative semantic matches.
 
-        The values are initial calibration values based
-        on the classifier diagnostic evaluation dataset.
+        These values are calibration values and should be changed
+        only after evaluating the classifier against a representative
+        test dataset.
         """
 
         api_key = os.getenv("COHERE_API_KEY")
@@ -218,13 +245,8 @@ class SemanticScopeClassifier:
             api_key=api_key
         )
 
-        self.positive_threshold = (
-            positive_threshold
-        )
-
-        self.margin_threshold = (
-            margin_threshold
-        )
+        self.positive_threshold = positive_threshold
+        self.margin_threshold = margin_threshold
 
         self.positive_names = [
             name
@@ -353,7 +375,6 @@ class SemanticScopeClassifier:
         for index, prototype_embedding in enumerate(
             prototype_embeddings
         ):
-
             similarity = (
                 self._cosine_similarity(
                     question_embedding,
@@ -402,7 +423,6 @@ class SemanticScopeClassifier:
         """
 
         if not question or not question.strip():
-
             return {
                 "is_cloud_operations": False,
                 "category": "OUT_OF_SCOPE",
@@ -437,13 +457,8 @@ class SemanticScopeClassifier:
             )
         )
 
-        best_positive = (
-            positive_similarities[0]
-        )
-
-        best_negative = (
-            negative_similarities[0]
-        )
+        best_positive = positive_similarities[0]
+        best_negative = negative_similarities[0]
 
         positive_similarity = (
             best_positive["similarity"]
@@ -465,13 +480,14 @@ class SemanticScopeClassifier:
         #
         # A request is considered Cloud Operations when:
         #
-        # 1. There is sufficient positive semantic similarity.
+        # 1. Positive similarity is sufficiently strong.
         #
         # 2. The strongest positive domain is sufficiently
         #    stronger than the strongest negative domain.
         #
-        # This relative margin is more robust than relying
-        # on a fixed negative similarity threshold.
+        # This prevents unrelated questions from being accepted
+        # merely because they have some semantic relationship
+        # with cloud technology.
         # ========================================================
 
         is_cloud_operations = (
@@ -482,7 +498,6 @@ class SemanticScopeClassifier:
         )
 
         if is_cloud_operations:
-
             return {
                 "is_cloud_operations": True,
                 "category": "CLOUD_OPERATIONS",
