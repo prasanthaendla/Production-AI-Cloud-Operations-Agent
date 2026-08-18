@@ -1,17 +1,21 @@
 """
 AI Cloud Operations Agent
 
-Phase 2:
-Multi-step tool-calling agent using Cohere.
+Phase 4:
+Multi-step tool-calling agent with semantic
+scope guardrails.
 
 The agent can:
-1. Understand the user's question.
-2. Select one or more tools.
-3. Execute the requested tools.
-4. Send tool results back to the LLM.
-5. Allow the LLM to request additional tools.
-6. Continue until the LLM produces a final answer.
-7. Stop after a maximum number of iterations.
+
+1. Determine whether a request belongs to the
+   Cloud Operations domain using semantic similarity.
+2. Reject unrelated requests before the agent loop.
+3. Select one or more tools.
+4. Execute requested tools.
+5. Send tool results back to the LLM.
+6. Allow the LLM to request additional tools.
+7. Continue until the LLM produces a final answer.
+8. Stop after a maximum number of iterations.
 
 This implementation intentionally avoids LangGraph
 so that the underlying agent loop is understood first.
@@ -25,50 +29,133 @@ from src.tools.tool_executor import (
     execute_tool,
     parse_tool_arguments,
 )
+from src.guardrails.semantic_classifier import (
+    SemanticScopeClassifier,
+)
 
 
 class CloudOperationsAgent:
     """
-    Multi-step AI Cloud Operations Agent.
-
-    The agent uses an LLM to dynamically select and
-    execute cloud operations tools.
+    Multi-step AI Cloud Operations Agent with
+    semantic scope validation.
     """
 
     # Maximum number of LLM/tool interaction cycles.
-    #
-    # This prevents the agent from entering an
-    # infinite tool-calling loop.
     MAX_ITERATIONS = 5
 
     def __init__(self):
+        """
+        Initialize the Cloud Operations Agent.
+        """
+
         self.llm = CohereClient()
+
+        # Semantic classifier determines whether
+        # the user's request belongs to the
+        # Cloud Operations domain.
+        self.scope_classifier = SemanticScopeClassifier()
 
     def run(self, question: str):
         """
-        Process a user question using the LLM
-        and available tools.
+        Process a user question.
 
-        The agent continues calling tools until:
+        The request first passes through the semantic
+        scope classifier.
 
-        1. The LLM returns a final answer, or
-        2. MAX_ITERATIONS is reached.
+        If the request is outside the supported
+        Cloud Operations domain, the LLM agent loop
+        is not executed.
+
+        Valid requests are passed to the multi-step
+        agent loop.
         """
+
+        # --------------------------------------------------
+        # Step 1: Semantic Scope Guardrail
+        # --------------------------------------------------
+
+        classification = self.scope_classifier.classify(
+            question
+        )
+
+        print(
+            "\n[Semantic Guardrail]"
+        )
+
+        print(
+            f"Category: "
+            f"{classification['category']}"
+        )
+
+        print(
+            f"Confidence: "
+            f"{classification['confidence']}"
+        )
+
+        if classification.get("matched_domain"):
+            print(
+                f"Matched Domain: "
+                f"{classification['matched_domain']}"
+            )
+
+        # --------------------------------------------------
+        # Reject out-of-scope requests
+        # --------------------------------------------------
+
+        if not classification["is_cloud_operations"]:
+
+            print(
+                "\n[Semantic Guardrail] "
+                "Request rejected as out-of-scope."
+            )
+
+            return (
+                "I can only help with questions "
+                "related to cloud infrastructure "
+                "and cloud operations."
+            )
+
+        # --------------------------------------------------
+        # Accept cloud-related request
+        # --------------------------------------------------
+
+        print(
+            "\n[Semantic Guardrail] "
+            "Request accepted."
+        )
+
+        # --------------------------------------------------
+        # Conversation History
+        # --------------------------------------------------
 
         messages = [
             {
                 "role": "system",
                 "content": (
                     "You are an AI Cloud Operations Agent. "
-                    "Investigate cloud infrastructure problems "
-                    "using the available tools. "
+                    "Your responsibility is to investigate "
+                    "cloud infrastructure and application "
+                    "operations using the available tools. "
+
+                    "Supported areas include cloud "
+                    "infrastructure, AWS, Azure, GCP, "
+                    "Kubernetes, Docker, networking, "
+                    "monitoring, application health, "
+                    "logs, deployments, incidents, "
+                    "performance and troubleshooting. "
+
                     "Do not invent infrastructure metrics. "
+
                     "Use tools when factual infrastructure "
                     "information is required. "
+
                     "When investigating an incident, use "
                     "additional tools when the available "
                     "evidence is not sufficient to answer "
-                    "the user's question confidently."
+                    "the user's question confidently. "
+
+                    "Only answer the user's question using "
+                    "available knowledge and tool results."
                 ),
             },
             {
@@ -78,13 +165,17 @@ class CloudOperationsAgent:
         ]
 
         # --------------------------------------------------
-        # Multi-step Agent Loop
+        # Step 2: Multi-step Agent Loop
         # --------------------------------------------------
 
-        for iteration in range(1, self.MAX_ITERATIONS + 1):
+        for iteration in range(
+            1,
+            self.MAX_ITERATIONS + 1,
+        ):
 
             print(
-                f"\n[Agent Iteration] {iteration}"
+                f"\n[Agent Iteration] "
+                f"{iteration}"
             )
 
             # --------------------------------------------------
@@ -97,37 +188,46 @@ class CloudOperationsAgent:
             )
 
             # --------------------------------------------------
-            # Check whether the LLM wants to call a tool
+            # Check whether the LLM requested tools
             # --------------------------------------------------
 
             tool_calls = response.message.tool_calls
 
             # --------------------------------------------------
-            # No tool call means the LLM has enough information
-            # and is ready to provide the final answer.
+            # No tool call means the LLM has enough
+            # information to produce the final answer.
             # --------------------------------------------------
 
             if not tool_calls:
 
-                return response.message.content[0].text
+                return (
+                    response.message
+                    .content[0]
+                    .text
+                )
 
             # --------------------------------------------------
-            # Add the assistant's tool-call message to the
-            # conversation history.
+            # Add assistant tool-call message
             # --------------------------------------------------
 
-            messages.append(response.message)
+            messages.append(
+                response.message
+            )
 
             # --------------------------------------------------
-            # Execute all tools requested by the LLM.
+            # Execute requested tools
             # --------------------------------------------------
 
             for tool_call in tool_calls:
 
-                tool_name = tool_call.function.name
+                tool_name = (
+                    tool_call.function.name
+                )
 
-                arguments = parse_tool_arguments(
-                    tool_call.function.arguments
+                arguments = (
+                    parse_tool_arguments(
+                        tool_call.function.arguments
+                    )
                 )
 
                 print(
@@ -141,7 +241,7 @@ class CloudOperationsAgent:
                 )
 
                 # --------------------------------------------------
-                # Execute the actual Python tool.
+                # Execute actual Python tool
                 # --------------------------------------------------
 
                 result = execute_tool(
@@ -155,45 +255,37 @@ class CloudOperationsAgent:
                 )
 
                 # --------------------------------------------------
-                # Convert the tool result into a Cohere-supported
-                # tool-result content block.
+                # Convert tool result into
+                # Cohere-compatible tool content.
                 # --------------------------------------------------
 
                 tool_content = [
                     {
                         "type": "document",
                         "document": {
-                            "data": json.dumps(result)
+                            "data": json.dumps(
+                                result
+                            )
                         },
                     }
                 ]
 
                 # --------------------------------------------------
-                # Add the tool result to the conversation.
-                #
-                # The next LLM iteration will receive:
-                #
-                # User question
-                # Assistant tool call
-                # Tool result
-                #
-                # and can decide whether another tool is required.
+                # Add tool result to conversation history.
                 # --------------------------------------------------
 
                 messages.append(
                     {
                         "role": "tool",
-                        "tool_call_id": tool_call.id,
+                        "tool_call_id": (
+                            tool_call.id
+                        ),
                         "content": tool_content,
                     }
                 )
 
         # --------------------------------------------------
-        # Safety Stop
-        #
-        # If the agent reaches MAX_ITERATIONS without
-        # producing a final answer, stop the loop instead
-        # of continuing indefinitely.
+        # Step 3: Safety Stop
         # --------------------------------------------------
 
         return (

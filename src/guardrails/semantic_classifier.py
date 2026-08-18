@@ -5,8 +5,16 @@ Uses Cohere embeddings to determine whether a user
 question belongs to the supported Cloud Operations
 domain.
 
-The classifier uses semantic domain prototypes rather
-than maintaining a large keyword/question list.
+The classifier uses both positive and negative
+semantic domain prototypes.
+
+Positive prototypes describe Cloud Operations.
+
+Negative prototypes describe common domains that
+should remain outside the Cloud Operations Agent.
+
+The classifier does not maintain a list of individual
+keywords or questions.
 """
 
 import math
@@ -19,13 +27,21 @@ class SemanticScopeClassifier:
     """
     Semantic classifier for the Cloud Operations Agent.
 
-    The classifier compares a user's question against
-    several representative Cloud Operations domain
-    descriptions.
+    The classifier compares a user's question against:
 
-    It does not attempt to maintain a list of every
-    possible cloud-related question.
+    1. Positive Cloud Operations prototypes.
+    2. Negative out-of-scope prototypes.
+
+    The final decision uses:
+
+    - Positive semantic similarity.
+    - Negative semantic similarity.
+    - Semantic margin between positive and negative scores.
     """
+
+    # ============================================================
+    # POSITIVE DOMAIN PROTOTYPES
+    # ============================================================
 
     CLOUD_DOMAIN_PROTOTYPES = [
         (
@@ -35,17 +51,9 @@ class SemanticScopeClassifier:
                 "AWS, Amazon Web Services, GCP, Google Cloud, "
                 "Microsoft Azure, EC2, virtual machines, "
                 "servers, compute resources, storage, "
-                "networking, VPCs, subnets, load balancers, "
-                "availability and infrastructure."
-            ),
-        ),
-        (
-            "cloud platforms",
-            (
-                "Cloud platform technologies including "
-                "AWS, GCP, Google Cloud Platform, Azure, "
-                "EC2, virtual machines, containers, "
-                "Kubernetes, Docker and cloud services."
+                "networking, VPCs, subnets, route tables, "
+                "load balancers, availability and "
+                "cloud infrastructure."
             ),
         ),
         (
@@ -56,7 +64,17 @@ class SemanticScopeClassifier:
                 "memory, application health, infrastructure "
                 "health, logs, alerts, incidents, outages, "
                 "performance, latency, availability and "
-                "troubleshooting."
+                "troubleshooting of cloud environments."
+            ),
+        ),
+        (
+            "cloud networking",
+            (
+                "Cloud networking concepts including "
+                "VPCs, virtual networks, subnets, route "
+                "tables, routing, security groups, network "
+                "ACLs, load balancers, DNS, connectivity, "
+                "firewalls and network troubleshooting."
             ),
         ),
         (
@@ -66,8 +84,8 @@ class SemanticScopeClassifier:
                 "production applications, investigating "
                 "incidents, analyzing logs, identifying "
                 "root causes, investigating failures, "
-                "timeouts, errors, degraded services and "
-                "unhealthy applications."
+                "timeouts, errors, degraded services, "
+                "unhealthy applications and outages."
             ),
         ),
         (
@@ -80,22 +98,112 @@ class SemanticScopeClassifier:
                 "site reliability engineering."
             ),
         ),
+        (
+            "cloud applications",
+            (
+                "Production applications running in cloud "
+                "environments, application availability, "
+                "application health, application errors, "
+                "application performance, service failures, "
+                "timeouts, HTTP errors, logs and operational "
+                "troubleshooting."
+            ),
+        ),
+    ]
+
+    # ============================================================
+    # NEGATIVE DOMAIN PROTOTYPES
+    # ============================================================
+
+    OUT_OF_SCOPE_PROTOTYPES = [
+        (
+            "general programming",
+            (
+                "General programming and software development "
+                "questions including programming languages, "
+                "learning Java, Python programming, coding "
+                "syntax, algorithms, data structures and "
+                "general software development unrelated to "
+                "cloud operations."
+            ),
+        ),
+        (
+            "general ai and machine learning",
+            (
+                "General artificial intelligence, machine "
+                "learning, deep learning, generative AI, "
+                "large language models, neural networks and "
+                "AI concepts that are not specifically about "
+                "operating cloud infrastructure."
+            ),
+        ),
+        (
+            "database knowledge",
+            (
+                "Database-specific knowledge and database "
+                "features including Oracle database versions, "
+                "Oracle 21c features, SQL concepts, database "
+                "architecture and database administration "
+                "questions that are not specifically about "
+                "cloud operations."
+            ),
+        ),
+        (
+            "general knowledge",
+            (
+                "General knowledge questions including "
+                "geography, history, countries, capitals, "
+                "politics, science and other general "
+                "information unrelated to cloud operations."
+            ),
+        ),
+        (
+            "education and exams",
+            (
+                "Education and examination questions including "
+                "exam preparation, study plans, learning "
+                "subjects, school questions and educational "
+                "guidance unrelated to cloud operations."
+            ),
+        ),
+        (
+            "personal questions",
+            (
+                "Personal questions about the user, their name, "
+                "identity, personal life, preferences or "
+                "private information."
+            ),
+        ),
+        (
+            "entertainment and casual conversation",
+            (
+                "Entertainment, jokes, poems, stories, casual "
+                "conversation and general social interaction "
+                "unrelated to cloud infrastructure or "
+                "cloud operations."
+            ),
+        ),
     ]
 
     def __init__(
         self,
-        threshold: float = 0.30,
+        positive_threshold: float = 0.25,
+        margin_threshold: float = 0.03,
     ):
         """
         Initialize the semantic classifier.
 
         Args:
-            threshold:
-                Minimum cosine similarity required for a
-                question to be considered cloud-related.
+            positive_threshold:
+                Minimum positive similarity required.
 
-        The initial threshold is intentionally conservative
-        but will be calibrated using our evaluation tests.
+            margin_threshold:
+                Minimum difference required between the
+                strongest positive and strongest negative
+                semantic matches.
+
+        The values are initial calibration values based
+        on the classifier diagnostic evaluation dataset.
         """
 
         api_key = os.getenv("COHERE_API_KEY")
@@ -110,31 +218,58 @@ class SemanticScopeClassifier:
             api_key=api_key
         )
 
-        self.threshold = threshold
+        self.positive_threshold = (
+            positive_threshold
+        )
 
-        self.prototype_names = [
+        self.margin_threshold = (
+            margin_threshold
+        )
+
+        self.positive_names = [
             name
             for name, _ in self.CLOUD_DOMAIN_PROTOTYPES
         ]
 
-        self.prototype_descriptions = [
+        self.positive_descriptions = [
             description
             for _, description in self.CLOUD_DOMAIN_PROTOTYPES
         ]
 
-        self.prototype_embeddings = (
-            self._create_prototype_embeddings()
+        self.negative_names = [
+            name
+            for name, _ in self.OUT_OF_SCOPE_PROTOTYPES
+        ]
+
+        self.negative_descriptions = [
+            description
+            for _, description in self.OUT_OF_SCOPE_PROTOTYPES
+        ]
+
+        self.positive_embeddings = (
+            self._create_embeddings(
+                self.positive_descriptions
+            )
         )
 
-    def _create_prototype_embeddings(self):
+        self.negative_embeddings = (
+            self._create_embeddings(
+                self.negative_descriptions
+            )
+        )
+
+    def _create_embeddings(
+        self,
+        texts,
+    ):
         """
-        Generate embeddings for all Cloud Operations
-        domain prototypes.
+        Generate embeddings for a collection of
+        semantic prototype descriptions.
         """
 
         response = self.client.embed(
             model="embed-v4.0",
-            texts=self.prototype_descriptions,
+            texts=texts,
             input_type="classification",
             output_dimension=1024,
             embedding_types=["float"],
@@ -202,43 +337,21 @@ class SemanticScopeClassifier:
             / (magnitude_a * magnitude_b)
         )
 
-    def classify(
+    def _calculate_similarities(
         self,
-        question: str,
-    ) -> dict:
+        question_embedding,
+        prototype_embeddings,
+        prototype_names,
+    ):
         """
-        Classify a user question using semantic
-        similarity against Cloud Operations prototypes.
-
-        Returns:
-
-            {
-                "is_cloud_operations": bool,
-                "category": str,
-                "confidence": float,
-                "matched_domain": str
-            }
+        Calculate similarity between a question and
+        a collection of semantic prototypes.
         """
-
-        if not question or not question.strip():
-
-            return {
-                "is_cloud_operations": False,
-                "category": "OUT_OF_SCOPE",
-                "confidence": 0.0,
-                "matched_domain": None,
-            }
-
-        question_embedding = (
-            self._create_question_embedding(
-                question
-            )
-        )
 
         similarities = []
 
         for index, prototype_embedding in enumerate(
-            self.prototype_embeddings
+            prototype_embeddings
         ):
 
             similarity = (
@@ -250,23 +363,122 @@ class SemanticScopeClassifier:
 
             similarities.append(
                 {
-                    "domain": self.prototype_names[index],
-                    "similarity": similarity,
+                    "domain": prototype_names[index],
+                    "similarity": round(
+                        similarity,
+                        4,
+                    ),
                 }
             )
 
-        # Find the strongest semantic match.
-        best_match = max(
-            similarities,
+        similarities.sort(
             key=lambda item: item["similarity"],
+            reverse=True,
         )
 
-        best_similarity = (
-            best_match["similarity"]
+        return similarities
+
+    def classify(
+        self,
+        question: str,
+    ) -> dict:
+        """
+        Classify a user question using positive and
+        negative semantic similarity.
+
+        Returns:
+
+            {
+                "is_cloud_operations": bool,
+                "category": str,
+                "confidence": float,
+                "matched_domain": str,
+                "positive_similarity": float,
+                "negative_similarity": float,
+                "margin": float,
+                "positive_similarities": [...],
+                "negative_similarities": [...]
+            }
+        """
+
+        if not question or not question.strip():
+
+            return {
+                "is_cloud_operations": False,
+                "category": "OUT_OF_SCOPE",
+                "confidence": 0.0,
+                "matched_domain": None,
+                "positive_similarity": 0.0,
+                "negative_similarity": 0.0,
+                "margin": 0.0,
+                "positive_similarities": [],
+                "negative_similarities": [],
+            }
+
+        question_embedding = (
+            self._create_question_embedding(
+                question
+            )
         )
+
+        positive_similarities = (
+            self._calculate_similarities(
+                question_embedding,
+                self.positive_embeddings,
+                self.positive_names,
+            )
+        )
+
+        negative_similarities = (
+            self._calculate_similarities(
+                question_embedding,
+                self.negative_embeddings,
+                self.negative_names,
+            )
+        )
+
+        best_positive = (
+            positive_similarities[0]
+        )
+
+        best_negative = (
+            negative_similarities[0]
+        )
+
+        positive_similarity = (
+            best_positive["similarity"]
+        )
+
+        negative_similarity = (
+            best_negative["similarity"]
+        )
+
+        margin = round(
+            positive_similarity
+            - negative_similarity,
+            4,
+        )
+
+        # ========================================================
+        # DECISION LOGIC
+        # ========================================================
+        #
+        # A request is considered Cloud Operations when:
+        #
+        # 1. There is sufficient positive semantic similarity.
+        #
+        # 2. The strongest positive domain is sufficiently
+        #    stronger than the strongest negative domain.
+        #
+        # This relative margin is more robust than relying
+        # on a fixed negative similarity threshold.
+        # ========================================================
 
         is_cloud_operations = (
-            best_similarity >= self.threshold
+            positive_similarity
+            >= self.positive_threshold
+            and margin
+            >= self.margin_threshold
         )
 
         if is_cloud_operations:
@@ -274,23 +486,43 @@ class SemanticScopeClassifier:
             return {
                 "is_cloud_operations": True,
                 "category": "CLOUD_OPERATIONS",
-                "confidence": round(
-                    best_similarity,
-                    4,
-                ),
+                "confidence": positive_similarity,
                 "matched_domain": (
-                    best_match["domain"]
+                    best_positive["domain"]
+                ),
+                "positive_similarity": (
+                    positive_similarity
+                ),
+                "negative_similarity": (
+                    negative_similarity
+                ),
+                "margin": margin,
+                "positive_similarities": (
+                    positive_similarities
+                ),
+                "negative_similarities": (
+                    negative_similarities
                 ),
             }
 
         return {
             "is_cloud_operations": False,
             "category": "OUT_OF_SCOPE",
-            "confidence": round(
-                best_similarity,
-                4,
-            ),
+            "confidence": positive_similarity,
             "matched_domain": (
-                best_match["domain"]
+                best_positive["domain"]
+            ),
+            "positive_similarity": (
+                positive_similarity
+            ),
+            "negative_similarity": (
+                negative_similarity
+            ),
+            "margin": margin,
+            "positive_similarities": (
+                positive_similarities
+            ),
+            "negative_similarities": (
+                negative_similarities
             ),
         }
