@@ -1,9 +1,9 @@
+
 """
 AI Cloud Operations Agent
 
-Phase 4:
-Multi-step tool-calling agent with semantic
-scope guardrails.
+Phase 6:
+Evidence-based multi-step cloud incident investigation.
 
 The agent can:
 
@@ -12,10 +12,11 @@ The agent can:
 2. Reject unrelated requests before the agent loop.
 3. Select one or more tools.
 4. Execute requested tools.
-5. Send tool results back to the LLM.
-6. Allow the LLM to request additional tools.
-7. Continue until the LLM produces a final answer.
-8. Stop after a maximum number of iterations.
+5. Store tool results as investigation evidence.
+6. Send tool results back to the LLM.
+7. Allow the LLM to request additional tools.
+8. Continue until the LLM produces a final answer.
+9. Stop after a maximum number of iterations.
 
 This implementation intentionally avoids LangGraph
 so that the underlying agent loop is understood first.
@@ -37,7 +38,8 @@ from src.guardrails.semantic_classifier import (
 class CloudOperationsAgent:
     """
     Multi-step AI Cloud Operations Agent with
-    semantic scope validation.
+    semantic scope validation and investigation
+    evidence tracking.
     """
 
     # Maximum number of LLM/tool interaction cycles.
@@ -50,10 +52,9 @@ class CloudOperationsAgent:
 
         self.llm = CohereClient()
 
-        # Semantic classifier determines whether
-        # the user's request belongs to the
-        # Cloud Operations domain.
-        self.scope_classifier = SemanticScopeClassifier()
+        self.scope_classifier = (
+            SemanticScopeClassifier()
+        )
 
     def run(self, question: str):
         """
@@ -62,20 +63,21 @@ class CloudOperationsAgent:
         The request first passes through the semantic
         scope classifier.
 
-        If the request is outside the supported
-        Cloud Operations domain, the LLM agent loop
-        is not executed.
+        Valid requests enter the multi-step agent loop.
 
-        Valid requests are passed to the multi-step
-        agent loop.
+        Tool results are stored as investigation evidence
+        so that the LLM can reason over the complete
+        investigation.
         """
 
         # --------------------------------------------------
         # Step 1: Semantic Scope Guardrail
         # --------------------------------------------------
 
-        classification = self.scope_classifier.classify(
-            question
+        classification = (
+            self.scope_classifier.classify(
+                question
+            )
         )
 
         print(
@@ -92,7 +94,9 @@ class CloudOperationsAgent:
             f"{classification['confidence']}"
         )
 
-        if classification.get("matched_domain"):
+        if classification.get(
+            "matched_domain"
+        ):
             print(
                 f"Matched Domain: "
                 f"{classification['matched_domain']}"
@@ -102,7 +106,9 @@ class CloudOperationsAgent:
         # Reject out-of-scope requests
         # --------------------------------------------------
 
-        if not classification["is_cloud_operations"]:
+        if not classification[
+            "is_cloud_operations"
+        ]:
 
             print(
                 "\n[Semantic Guardrail] "
@@ -125,6 +131,28 @@ class CloudOperationsAgent:
         )
 
         # --------------------------------------------------
+        # Investigation Evidence
+        # --------------------------------------------------
+        #
+        # Every successful tool execution is stored here.
+        #
+        # Example:
+        #
+        # {
+        #     "tool": "get_instance_health",
+        #     "arguments": {
+        #         "instance_id": "i-demo-001"
+        #     },
+        #     "result": {...}
+        # }
+        #
+        # This gives the investigation a persistent
+        # evidence trail during the current request.
+        # --------------------------------------------------
+
+        investigation_evidence = []
+
+        # --------------------------------------------------
         # Conversation History
         # --------------------------------------------------
 
@@ -133,6 +161,7 @@ class CloudOperationsAgent:
                 "role": "system",
                 "content": (
                     "You are an AI Cloud Operations Agent. "
+
                     "Your responsibility is to investigate "
                     "cloud infrastructure and application "
                     "operations using the available tools. "
@@ -149,10 +178,24 @@ class CloudOperationsAgent:
                     "Use tools when factual infrastructure "
                     "information is required. "
 
-                    "When investigating an incident, use "
-                    "additional tools when the available "
-                    "evidence is not sufficient to answer "
-                    "the user's question confidently. "
+                    "When investigating an incident, "
+                    "analyze the available evidence before "
+                    "producing the final answer. "
+
+                    "If the current evidence is insufficient "
+                    "to answer the question confidently, "
+                    "request another appropriate tool. "
+
+                    "Use the results of previous tools when "
+                    "deciding what additional evidence is "
+                    "required. "
+
+                    "Do not claim that one event caused "
+                    "another unless the available evidence "
+                    "supports that conclusion. "
+
+                    "Clearly distinguish observed facts "
+                    "from analysis or likely causes. "
 
                     "Only answer the user's question using "
                     "available knowledge and tool results."
@@ -191,7 +234,9 @@ class CloudOperationsAgent:
             # Check whether the LLM requested tools
             # --------------------------------------------------
 
-            tool_calls = response.message.tool_calls
+            tool_calls = (
+                response.message.tool_calls
+            )
 
             # --------------------------------------------------
             # No tool call means the LLM has enough
@@ -199,6 +244,15 @@ class CloudOperationsAgent:
             # --------------------------------------------------
 
             if not tool_calls:
+
+                print(
+                    "\n[Investigation Evidence]"
+                )
+
+                print(
+                    f"Evidence items collected: "
+                    f"{len(investigation_evidence)}"
+                )
 
                 return (
                     response.message
@@ -255,6 +309,34 @@ class CloudOperationsAgent:
                 )
 
                 # --------------------------------------------------
+                # Store investigation evidence
+                # --------------------------------------------------
+
+                evidence_item = {
+                    "tool": tool_name,
+                    "arguments": arguments,
+                    "result": result,
+                    "iteration": iteration,
+                }
+
+                investigation_evidence.append(
+                    evidence_item
+                )
+
+                print(
+                    "\n[Evidence Recorded]"
+                )
+
+                print(
+                    f"Tool: {tool_name}"
+                )
+
+                print(
+                    f"Evidence Count: "
+                    f"{len(investigation_evidence)}"
+                )
+
+                # --------------------------------------------------
                 # Convert tool result into
                 # Cohere-compatible tool content.
                 # --------------------------------------------------
@@ -272,6 +354,10 @@ class CloudOperationsAgent:
 
                 # --------------------------------------------------
                 # Add tool result to conversation history.
+                #
+                # The next LLM iteration receives the
+                # tool result and can decide whether
+                # additional evidence is required.
                 # --------------------------------------------------
 
                 messages.append(
@@ -287,6 +373,15 @@ class CloudOperationsAgent:
         # --------------------------------------------------
         # Step 3: Safety Stop
         # --------------------------------------------------
+
+        print(
+            "\n[Investigation Evidence]"
+        )
+
+        print(
+            f"Evidence items collected: "
+            f"{len(investigation_evidence)}"
+        )
 
         return (
             "I was unable to complete the investigation "
