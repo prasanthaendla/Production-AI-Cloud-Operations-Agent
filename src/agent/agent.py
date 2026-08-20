@@ -1,22 +1,26 @@
-
 """
 AI Cloud Operations Agent
 
-Phase 6:
-Evidence-based multi-step cloud incident investigation.
+Phase 7:
+Multi-step tool-calling agent with semantic scope
+guardrails and capability-aware routing.
 
 The agent can:
 
 1. Determine whether a request belongs to the
    Cloud Operations domain using semantic similarity.
 2. Reject unrelated requests before the agent loop.
-3. Select one or more tools.
-4. Execute requested tools.
-5. Store tool results as investigation evidence.
-6. Send tool results back to the LLM.
-7. Allow the LLM to request additional tools.
-8. Continue until the LLM produces a final answer.
-9. Stop after a maximum number of iterations.
+3. Determine whether the request matches a capability
+   currently supported by the agent.
+4. Reject cloud-related requests that require
+   unsupported capabilities.
+5. Select one or more tools.
+6. Execute requested tools.
+7. Send tool results back to the LLM.
+8. Allow the LLM to request additional tools.
+9. Continue until the LLM produces a final answer.
+10. Track investigation evidence.
+11. Stop after a maximum number of iterations.
 
 This implementation intentionally avoids LangGraph
 so that the underlying agent loop is understood first.
@@ -25,21 +29,31 @@ so that the underlying agent loop is understood first.
 import json
 
 from src.llm.cohere_client import CohereClient
+
 from src.tools.tool_definitions import TOOLS
+
 from src.tools.tool_executor import (
     execute_tool,
     parse_tool_arguments,
 )
+
 from src.guardrails.semantic_classifier import (
     SemanticScopeClassifier,
+)
+
+from src.agent.capability_router import (
+    CapabilityRouter,
 )
 
 
 class CloudOperationsAgent:
     """
-    Multi-step AI Cloud Operations Agent with
-    semantic scope validation and investigation
-    evidence tracking.
+    Multi-step AI Cloud Operations Agent with:
+
+    - semantic scope validation
+    - capability-aware routing
+    - tool calling
+    - investigation evidence tracking
     """
 
     # Maximum number of LLM/tool interaction cycles.
@@ -52,27 +66,46 @@ class CloudOperationsAgent:
 
         self.llm = CohereClient()
 
+        # --------------------------------------------------
+        # Semantic scope classifier
+        # --------------------------------------------------
+
         self.scope_classifier = (
             SemanticScopeClassifier()
+        )
+
+        # --------------------------------------------------
+        # Capability router
+        # --------------------------------------------------
+
+        self.capability_router = (
+            CapabilityRouter()
         )
 
     def run(self, question: str):
         """
         Process a user question.
 
-        The request first passes through the semantic
-        scope classifier.
+        Processing flow:
 
-        Valid requests enter the multi-step agent loop.
-
-        Tool results are stored as investigation evidence
-        so that the LLM can reason over the complete
-        investigation.
+        User Question
+              ↓
+        Semantic Scope Guardrail
+              ↓
+        Capability Router
+              ↓
+        Agent Loop
+              ↓
+        Tool Execution
+              ↓
+        Evidence
+              ↓
+        Final Answer
         """
 
-        # --------------------------------------------------
+        # ==================================================
         # Step 1: Semantic Scope Guardrail
-        # --------------------------------------------------
+        # ==================================================
 
         classification = (
             self.scope_classifier.classify(
@@ -97,6 +130,7 @@ class CloudOperationsAgent:
         if classification.get(
             "matched_domain"
         ):
+
             print(
                 f"Matched Domain: "
                 f"{classification['matched_domain']}"
@@ -130,31 +164,73 @@ class CloudOperationsAgent:
             "Request accepted."
         )
 
+        # ==================================================
+        # Step 2: Capability Routing
+        # ==================================================
+
+        capability = (
+            self.capability_router.route(
+                question
+            )
+        )
+
+        print(
+            "\n[Capability Router]"
+        )
+
+        print(
+            f"Supported: "
+            f"{capability['is_supported']}"
+        )
+
+        print(
+            f"Capability: "
+            f"{capability['capability']}"
+        )
+
+        print(
+            f"Confidence: "
+            f"{capability['confidence']}"
+        )
+
+        print(
+            f"Margin: "
+            f"{capability['margin']}"
+        )
+
         # --------------------------------------------------
-        # Investigation Evidence
-        # --------------------------------------------------
-        #
-        # Every successful tool execution is stored here.
-        #
-        # Example:
-        #
-        # {
-        #     "tool": "get_instance_health",
-        #     "arguments": {
-        #         "instance_id": "i-demo-001"
-        #     },
-        #     "result": {...}
-        # }
-        #
-        # This gives the investigation a persistent
-        # evidence trail during the current request.
+        # Reject unsupported capabilities
         # --------------------------------------------------
 
-        investigation_evidence = []
+        if not capability[
+            "is_supported"
+        ]:
+
+            print(
+                "\n[Capability Router] "
+                "Request cannot be handled by "
+                "the currently available capabilities."
+            )
+
+            return (
+                "This is related to cloud, but I don't "
+                "currently have the capability or tools "
+                "required to answer this question."
+            )
 
         # --------------------------------------------------
-        # Conversation History
+        # Capability accepted
         # --------------------------------------------------
+
+        print(
+            "\n[Capability Router] "
+            "Using capability: "
+            f"{capability['capability']}"
+        )
+
+        # ==================================================
+        # Step 3: Conversation History
+        # ==================================================
 
         messages = [
             {
@@ -178,27 +254,17 @@ class CloudOperationsAgent:
                     "Use tools when factual infrastructure "
                     "information is required. "
 
-                    "When investigating an incident, "
-                    "analyze the available evidence before "
-                    "producing the final answer. "
-
-                    "If the current evidence is insufficient "
-                    "to answer the question confidently, "
-                    "request another appropriate tool. "
-
-                    "Use the results of previous tools when "
-                    "deciding what additional evidence is "
-                    "required. "
-
-                    "Do not claim that one event caused "
-                    "another unless the available evidence "
-                    "supports that conclusion. "
-
-                    "Clearly distinguish observed facts "
-                    "from analysis or likely causes. "
+                    "When investigating an incident, use "
+                    "additional tools when the available "
+                    "evidence is not sufficient to answer "
+                    "the user's question confidently. "
 
                     "Only answer the user's question using "
-                    "available knowledge and tool results."
+                    "available knowledge and tool results. "
+
+                    "Do not claim to have performed an "
+                    "operation unless an available tool "
+                    "actually performed that operation."
                 ),
             },
             {
@@ -207,9 +273,15 @@ class CloudOperationsAgent:
             },
         ]
 
-        # --------------------------------------------------
-        # Step 2: Multi-step Agent Loop
-        # --------------------------------------------------
+        # ==================================================
+        # Investigation Evidence
+        # ==================================================
+
+        investigation_evidence = []
+
+        # ==================================================
+        # Step 4: Multi-step Agent Loop
+        # ==================================================
 
         for iteration in range(
             1,
@@ -250,7 +322,7 @@ class CloudOperationsAgent:
                 )
 
                 print(
-                    f"Evidence items collected: "
+                    "Evidence items collected: "
                     f"{len(investigation_evidence)}"
                 )
 
@@ -309,14 +381,13 @@ class CloudOperationsAgent:
                 )
 
                 # --------------------------------------------------
-                # Store investigation evidence
+                # Record investigation evidence
                 # --------------------------------------------------
 
                 evidence_item = {
                     "tool": tool_name,
                     "arguments": arguments,
                     "result": result,
-                    "iteration": iteration,
                 }
 
                 investigation_evidence.append(
@@ -332,7 +403,7 @@ class CloudOperationsAgent:
                 )
 
                 print(
-                    f"Evidence Count: "
+                    "Evidence Count: "
                     f"{len(investigation_evidence)}"
                 )
 
@@ -354,10 +425,6 @@ class CloudOperationsAgent:
 
                 # --------------------------------------------------
                 # Add tool result to conversation history.
-                #
-                # The next LLM iteration receives the
-                # tool result and can decide whether
-                # additional evidence is required.
                 # --------------------------------------------------
 
                 messages.append(
@@ -370,16 +437,16 @@ class CloudOperationsAgent:
                     }
                 )
 
-        # --------------------------------------------------
-        # Step 3: Safety Stop
-        # --------------------------------------------------
+        # ==================================================
+        # Step 5: Safety Stop
+        # ==================================================
 
         print(
             "\n[Investigation Evidence]"
         )
 
         print(
-            f"Evidence items collected: "
+            "Evidence items collected: "
             f"{len(investigation_evidence)}"
         )
 
