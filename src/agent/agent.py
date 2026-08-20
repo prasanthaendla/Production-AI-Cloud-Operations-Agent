@@ -1,28 +1,16 @@
 """
 AI Cloud Operations Agent
 
-Phase 7:
-Multi-step tool-calling agent with semantic scope
-guardrails and capability-aware routing.
+Phase 8:
+Multi-step tool-calling agent with:
 
-The agent can:
+- semantic scope guardrails
+- capability-aware routing
+- structured investigation state
+- tool calling
+- evidence tracking
 
-1. Determine whether a request belongs to the
-   Cloud Operations domain using semantic similarity.
-2. Reject unrelated requests before the agent loop.
-3. Determine whether the request matches a capability
-   currently supported by the agent.
-4. Reject cloud-related requests that require
-   unsupported capabilities.
-5. Select one or more tools.
-6. Execute requested tools.
-7. Send tool results back to the LLM.
-8. Allow the LLM to request additional tools.
-9. Continue until the LLM produces a final answer.
-10. Track investigation evidence.
-11. Stop after a maximum number of iterations.
-
-This implementation intentionally avoids LangGraph
+The implementation intentionally avoids LangGraph
 so that the underlying agent loop is understood first.
 """
 
@@ -45,15 +33,24 @@ from src.agent.capability_router import (
     CapabilityRouter,
 )
 
+from src.agent.investigation_state import (
+    InvestigationState,
+)
+
 
 class CloudOperationsAgent:
     """
-    Multi-step AI Cloud Operations Agent with:
+    Multi-step AI Cloud Operations Agent.
 
-    - semantic scope validation
-    - capability-aware routing
-    - tool calling
-    - investigation evidence tracking
+    Responsibilities:
+
+    1. Semantic scope validation
+    2. Capability routing
+    3. Investigation state management
+    4. Tool selection
+    5. Tool execution
+    6. Evidence collection
+    7. Final investigation response
     """
 
     # Maximum number of LLM/tool interaction cycles.
@@ -82,7 +79,10 @@ class CloudOperationsAgent:
             CapabilityRouter()
         )
 
-    def run(self, question: str):
+    def run(
+        self,
+        question: str,
+    ):
         """
         Process a user question.
 
@@ -93,6 +93,8 @@ class CloudOperationsAgent:
         Semantic Scope Guardrail
               ↓
         Capability Router
+              ↓
+        Investigation State
               ↓
         Agent Loop
               ↓
@@ -155,10 +157,6 @@ class CloudOperationsAgent:
                 "and cloud operations."
             )
 
-        # --------------------------------------------------
-        # Accept cloud-related request
-        # --------------------------------------------------
-
         print(
             "\n[Semantic Guardrail] "
             "Request accepted."
@@ -218,10 +216,6 @@ class CloudOperationsAgent:
                 "required to answer this question."
             )
 
-        # --------------------------------------------------
-        # Capability accepted
-        # --------------------------------------------------
-
         print(
             "\n[Capability Router] "
             "Using capability: "
@@ -229,7 +223,27 @@ class CloudOperationsAgent:
         )
 
         # ==================================================
-        # Step 3: Conversation History
+        # Step 3: Create Investigation State
+        # ==================================================
+
+        investigation = InvestigationState(
+            question=question,
+            capability=(
+                capability["capability"]
+            ),
+        )
+
+        print(
+            "\n[Investigation State]"
+        )
+
+        print(
+            f"Capability: "
+            f"{investigation.capability}"
+        )
+
+        # ==================================================
+        # Step 4: Conversation History
         # ==================================================
 
         messages = [
@@ -274,19 +288,21 @@ class CloudOperationsAgent:
         ]
 
         # ==================================================
-        # Investigation Evidence
-        # ==================================================
-
-        investigation_evidence = []
-
-        # ==================================================
-        # Step 4: Multi-step Agent Loop
+        # Step 5: Multi-step Agent Loop
         # ==================================================
 
         for iteration in range(
             1,
             self.MAX_ITERATIONS + 1,
         ):
+
+            # --------------------------------------------------
+            # Record iteration in investigation state
+            # --------------------------------------------------
+
+            investigation.record_iteration(
+                iteration
+            )
 
             print(
                 f"\n[Agent Iteration] "
@@ -318,12 +334,27 @@ class CloudOperationsAgent:
             if not tool_calls:
 
                 print(
-                    "\n[Investigation Evidence]"
+                    "\n[Investigation State]"
                 )
 
                 print(
-                    "Evidence items collected: "
-                    f"{len(investigation_evidence)}"
+                    f"Iterations: "
+                    f"{investigation.iterations}"
+                )
+
+                print(
+                    f"Tool Calls: "
+                    f"{len(investigation.tool_calls)}"
+                )
+
+                print(
+                    f"Evidence Items: "
+                    f"{len(investigation.evidence)}"
+                )
+
+                print(
+                    f"Findings: "
+                    f"{len(investigation.findings)}"
                 )
 
                 return (
@@ -367,6 +398,15 @@ class CloudOperationsAgent:
                 )
 
                 # --------------------------------------------------
+                # Record requested tool call
+                # --------------------------------------------------
+
+                investigation.record_tool_call(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                )
+
+                # --------------------------------------------------
                 # Execute actual Python tool
                 # --------------------------------------------------
 
@@ -384,14 +424,10 @@ class CloudOperationsAgent:
                 # Record investigation evidence
                 # --------------------------------------------------
 
-                evidence_item = {
-                    "tool": tool_name,
-                    "arguments": arguments,
-                    "result": result,
-                }
-
-                investigation_evidence.append(
-                    evidence_item
+                investigation.record_evidence(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    result=result,
                 )
 
                 print(
@@ -404,7 +440,7 @@ class CloudOperationsAgent:
 
                 print(
                     "Evidence Count: "
-                    f"{len(investigation_evidence)}"
+                    f"{len(investigation.evidence)}"
                 )
 
                 # --------------------------------------------------
@@ -438,16 +474,26 @@ class CloudOperationsAgent:
                 )
 
         # ==================================================
-        # Step 5: Safety Stop
+        # Step 6: Safety Stop
         # ==================================================
 
         print(
-            "\n[Investigation Evidence]"
+            "\n[Investigation State]"
         )
 
         print(
-            "Evidence items collected: "
-            f"{len(investigation_evidence)}"
+            f"Iterations: "
+            f"{investigation.iterations}"
+        )
+
+        print(
+            f"Tool Calls: "
+            f"{len(investigation.tool_calls)}"
+        )
+
+        print(
+            f"Evidence Items: "
+            f"{len(investigation.evidence)}"
         )
 
         return (
