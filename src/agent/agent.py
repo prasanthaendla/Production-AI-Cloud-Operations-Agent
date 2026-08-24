@@ -12,6 +12,7 @@ Multi-step cloud operations investigation agent with:
 - Hypothesis generation
 - Evidence-driven additional tool selection
 - Root cause assessment
+- Confidence / uncertainty evaluation
 """
 
 import json
@@ -49,6 +50,10 @@ from src.agent.root_cause_assessor import (
     RootCauseAssessor,
 )
 
+from src.agent.confidence_engine import (
+    ConfidenceEngine,
+)
+
 
 class CloudOperationsAgent:
     """
@@ -82,6 +87,8 @@ class CloudOperationsAgent:
             ↓
         Root Cause Assessment
             ↓
+        Confidence / Uncertainty
+            ↓
         Final Answer
     """
 
@@ -109,6 +116,10 @@ class CloudOperationsAgent:
 
         self.root_cause_assessor = (
             RootCauseAssessor()
+        )
+
+        self.confidence_engine = (
+            ConfidenceEngine()
         )
 
     # ======================================================
@@ -270,8 +281,9 @@ class CloudOperationsAgent:
                     "Do not stop after the first tool call "
                     "when additional evidence is required. "
                     "Use the investigation findings, "
-                    "hypotheses, and root cause assessment "
-                    "when producing the final answer."
+                    "hypotheses, root cause assessment, "
+                    "and confidence assessment when "
+                    "producing the final answer."
                 ),
             },
             {
@@ -463,21 +475,105 @@ class CloudOperationsAgent:
                     root_cause
                 )
 
-                # --------------------------------------------------
-                # Give root cause assessment back to LLM
-                # before final answer
-                # --------------------------------------------------
+                # ==================================================
+                # Confidence / Uncertainty
+                # ==================================================
+
+                print(
+                    "\n[Confidence Assessment]"
+                )
+
+                confidence_input = dict(
+                    root_cause_result
+                )
+
+                # RootCauseAssessor returns the evidence
+                # associated with the assessment. Preserve
+                # compatibility with ConfidenceEngine.
+                if (
+                    "supporting_evidence"
+                    not in confidence_input
+                ):
+
+                    confidence_input[
+                        "supporting_evidence"
+                    ] = (
+                        root_cause_result.get(
+                            "supporting_evidence",
+                            [],
+                        )
+                    )
+
+                if (
+                    "contradicting_evidence"
+                    not in confidence_input
+                ):
+
+                    confidence_input[
+                        "contradicting_evidence"
+                    ] = (
+                        root_cause_result.get(
+                            "contradicting_evidence",
+                            [],
+                        )
+                    )
+
+                confidence_result = (
+                    self.confidence_engine.evaluate(
+                        confidence_input
+                    )
+                )
+
+                investigation.confidence_assessment = (
+                    confidence_result
+                )
+
+                print(
+                    "Confidence Level: "
+                    f"{confidence_result['confidence_level']}"
+                )
+
+                print(
+                    "Confidence Score: "
+                    f"{confidence_result['confidence_score']}"
+                )
+
+                print(
+                    "Supporting Evidence: "
+                    f"{confidence_result['supporting_evidence_count']}"
+                )
+
+                print(
+                    "Contradicting Evidence: "
+                    f"{confidence_result['contradicting_evidence_count']}"
+                )
+
+                print(
+                    "Uncertainty: "
+                    f"{confidence_result['uncertainty']}"
+                )
+
+                # ==================================================
+                # Give root cause + confidence assessment
+                # back to LLM before final answer
+                # ==================================================
 
                 messages.append(
                     {
                         "role": "user",
                         "content": (
                             "The investigation is complete. "
-                            "Use the following root cause "
-                            "assessment when producing the "
-                            "final answer:\n\n"
+                            "Use the following root cause and "
+                            "confidence assessment when "
+                            "producing the final answer.\n\n"
+                            "ROOT CAUSE ASSESSMENT:\n"
                             + json.dumps(
                                 root_cause_result
+                            )
+                            + "\n\n"
+                            "CONFIDENCE / UNCERTAINTY:\n"
+                            + json.dumps(
+                                confidence_result
                             )
                         ),
                     }
