@@ -2,14 +2,8 @@
 Investigation Hypothesis Engine
 
 Converts deterministic investigation findings into
-structured hypotheses that can guide additional
-investigation.
-
-The hypothesis engine does not call the LLM.
-
-Its responsibility is to identify possible explanations
-from known evidence without claiming that a hypothesis
-is a confirmed root cause.
+structured hypotheses and identifies additional
+evidence that may be required to validate them.
 """
 
 
@@ -20,19 +14,40 @@ class HypothesisEngine:
     A hypothesis represents a possible explanation for
     an incident.
 
-    It is intentionally different from a finding:
+    The engine also identifies recommended evidence
+    that can be collected to validate each hypothesis.
 
-        Finding:
-            CPU utilization is 92.4%.
-
-        Hypothesis:
-            Resource saturation may be contributing
-            to application degradation.
-
-    Hypotheses are not treated as confirmed root causes.
-    Additional evidence should be collected before
-    making a final root-cause assessment.
+    It does not claim that a hypothesis is a confirmed
+    root cause.
     """
+
+    HIGH_CPU_TEXT = (
+        "High CPU utilization detected:"
+    )
+
+    HIGH_MEMORY_TEXT = (
+        "High memory utilization detected:"
+    )
+
+    APPLICATION_UNHEALTHY_TEXT = (
+        "Application status is unhealthy."
+    )
+
+    INSTANCE_DEGRADED_TEXT = (
+        "Instance health is degraded."
+    )
+
+    NETWORK_PROBLEM_TEXT = (
+        "Network status is"
+    )
+
+    APPLICATION_ERROR_TEXT = (
+        "Application errors detected:"
+    )
+
+    DEPLOYMENT_FAILURE_TEXT = (
+        "A recent deployment failed"
+    )
 
     # --------------------------------------------------
     # Public API
@@ -44,34 +59,27 @@ class HypothesisEngine:
     ) -> list:
         """
         Generate hypotheses from investigation findings.
-
-        Args:
-            findings:
-                Findings produced by InvestigationAnalyzer.
-
-        Returns:
-            List of structured hypothesis dictionaries.
         """
 
         hypotheses = []
 
         # --------------------------------------------------
-        # Resource saturation hypothesis
+        # Resource saturation
         # --------------------------------------------------
 
         has_high_cpu = self._contains_finding(
             findings,
-            "High CPU utilization detected:",
+            self.HIGH_CPU_TEXT,
         )
 
         has_high_memory = self._contains_finding(
             findings,
-            "High memory utilization detected:",
+            self.HIGH_MEMORY_TEXT,
         )
 
         application_unhealthy = self._contains_finding(
             findings,
-            "Application status is unhealthy.",
+            self.APPLICATION_UNHEALTHY_TEXT,
         )
 
         if (
@@ -91,27 +99,31 @@ class HypothesisEngine:
                         finding
                         for finding in findings
                         if (
-                            "High CPU utilization detected:"
+                            self.HIGH_CPU_TEXT
                             in finding
                             or
-                            "High memory utilization detected:"
+                            self.HIGH_MEMORY_TEXT
                             in finding
                             or
-                            "Application status is unhealthy."
+                            self.APPLICATION_UNHEALTHY_TEXT
                             in finding
                         )
                     ],
                     "requires_validation": True,
+                    "recommended_evidence": [
+                        "application_logs",
+                        "deployments",
+                    ],
                 }
             )
 
         # --------------------------------------------------
-        # Instance degradation hypothesis
+        # Instance degradation
         # --------------------------------------------------
 
         instance_degraded = self._contains_finding(
             findings,
-            "Instance health is degraded.",
+            self.INSTANCE_DEGRADED_TEXT,
         )
 
         if instance_degraded:
@@ -128,23 +140,25 @@ class HypothesisEngine:
                         finding
                         for finding in findings
                         if (
-                            "Instance health is degraded."
+                            self.INSTANCE_DEGRADED_TEXT
                             in finding
                         )
                     ],
                     "requires_validation": True,
+                    "recommended_evidence": [
+                        "application_logs",
+                        "deployments",
+                    ],
                 }
             )
 
         # --------------------------------------------------
-        # Network hypothesis
+        # Network problem
         # --------------------------------------------------
 
-        network_problem = (
-            self._contains_finding(
-                findings,
-                "Network status is",
-            )
+        network_problem = self._contains_finding(
+            findings,
+            self.NETWORK_PROBLEM_TEXT,
         )
 
         if network_problem:
@@ -160,23 +174,24 @@ class HypothesisEngine:
                         finding
                         for finding in findings
                         if (
-                            "Network status is"
+                            self.NETWORK_PROBLEM_TEXT
                             in finding
                         )
                     ],
                     "requires_validation": True,
+                    "recommended_evidence": [
+                        "application_logs",
+                    ],
                 }
             )
 
         # --------------------------------------------------
-        # Application log hypothesis
+        # Application errors
         # --------------------------------------------------
 
-        application_errors = (
-            self._contains_finding(
-                findings,
-                "Application errors detected:",
-            )
+        application_errors = self._contains_finding(
+            findings,
+            self.APPLICATION_ERROR_TEXT,
         )
 
         if application_errors:
@@ -193,23 +208,24 @@ class HypothesisEngine:
                         finding
                         for finding in findings
                         if (
-                            "Application errors detected:"
+                            self.APPLICATION_ERROR_TEXT
                             in finding
                         )
                     ],
                     "requires_validation": True,
+                    "recommended_evidence": [
+                        "deployments",
+                    ],
                 }
             )
 
         # --------------------------------------------------
-        # Deployment hypothesis
+        # Deployment failure
         # --------------------------------------------------
 
-        deployment_failure = (
-            self._contains_finding(
-                findings,
-                "A recent deployment failed",
-            )
+        deployment_failure = self._contains_finding(
+            findings,
+            self.DEPLOYMENT_FAILURE_TEXT,
         )
 
         if deployment_failure:
@@ -225,15 +241,63 @@ class HypothesisEngine:
                         finding
                         for finding in findings
                         if (
-                            "A recent deployment failed"
+                            self.DEPLOYMENT_FAILURE_TEXT
                             in finding
                         )
                     ],
                     "requires_validation": True,
+                    "recommended_evidence": [
+                        "application_logs",
+                    ],
                 }
             )
 
         return hypotheses
+
+    # --------------------------------------------------
+    # Evidence Recommendations
+    # --------------------------------------------------
+
+    def get_recommended_evidence(
+        self,
+        hypotheses: list,
+    ) -> list:
+        """
+        Return unique evidence types recommended for
+        validating the generated hypotheses.
+        """
+
+        evidence_types = []
+
+        for hypothesis in hypotheses:
+
+            if not isinstance(
+                hypothesis,
+                dict,
+            ):
+                continue
+
+            if not hypothesis.get(
+                "requires_validation",
+                False,
+            ):
+                continue
+
+            for evidence_type in hypothesis.get(
+                "recommended_evidence",
+                [],
+            ):
+
+                if (
+                    evidence_type
+                    not in evidence_types
+                ):
+
+                    evidence_types.append(
+                        evidence_type
+                    )
+
+        return evidence_types
 
     # --------------------------------------------------
     # Helper
@@ -245,8 +309,8 @@ class HypothesisEngine:
         text: str,
     ) -> bool:
         """
-        Check whether any finding contains the
-        specified text.
+        Check whether any finding contains
+        the specified text.
         """
 
         return any(
