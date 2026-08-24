@@ -1,7 +1,7 @@
 """
 AI Cloud Operations Agent
 
-Phase 8:
+Phase 9:
 Multi-step tool-calling agent with:
 
 - semantic scope guardrails
@@ -9,6 +9,7 @@ Multi-step tool-calling agent with:
 - structured investigation state
 - tool calling
 - evidence tracking
+- deterministic investigation analysis
 
 The implementation intentionally avoids LangGraph
 so that the underlying agent loop is understood first.
@@ -37,6 +38,10 @@ from src.agent.investigation_state import (
     InvestigationState,
 )
 
+from src.agent.investigation_analyzer import (
+    InvestigationAnalyzer,
+)
+
 
 class CloudOperationsAgent:
     """
@@ -50,7 +55,9 @@ class CloudOperationsAgent:
     4. Tool selection
     5. Tool execution
     6. Evidence collection
-    7. Final investigation response
+    7. Evidence analysis
+    8. Finding generation
+    9. Final investigation response
     """
 
     # Maximum number of LLM/tool interaction cycles.
@@ -79,6 +86,14 @@ class CloudOperationsAgent:
             CapabilityRouter()
         )
 
+        # --------------------------------------------------
+        # Investigation analyzer
+        # --------------------------------------------------
+
+        self.investigation_analyzer = (
+            InvestigationAnalyzer()
+        )
+
     def run(
         self,
         question: str,
@@ -101,6 +116,12 @@ class CloudOperationsAgent:
         Tool Execution
               ↓
         Evidence
+              ↓
+        Investigation Analyzer
+              ↓
+        Findings
+              ↓
+        Agent Loop
               ↓
         Final Answer
         """
@@ -243,7 +264,13 @@ class CloudOperationsAgent:
         )
 
         # ==================================================
-        # Step 4: Conversation History
+        # Step 4: Create Investigation Analyzer
+        # ==================================================
+
+        analyzer = self.investigation_analyzer
+
+        # ==================================================
+        # Step 5: Conversation History
         # ==================================================
 
         messages = [
@@ -273,8 +300,17 @@ class CloudOperationsAgent:
                     "evidence is not sufficient to answer "
                     "the user's question confidently. "
 
+                    "Use investigation findings as "
+                    "supporting evidence when they are "
+                    "provided. "
+
+                    "Do not treat a finding as proof of "
+                    "root cause unless the available "
+                    "evidence supports that conclusion. "
+
                     "Only answer the user's question using "
-                    "available knowledge and tool results. "
+                    "available knowledge, tool results, "
+                    "and investigation findings. "
 
                     "Do not claim to have performed an "
                     "operation unless an available tool "
@@ -288,7 +324,7 @@ class CloudOperationsAgent:
         ]
 
         # ==================================================
-        # Step 5: Multi-step Agent Loop
+        # Step 6: Multi-step Agent Loop
         # ==================================================
 
         for iteration in range(
@@ -297,7 +333,7 @@ class CloudOperationsAgent:
         ):
 
             # --------------------------------------------------
-            # Record iteration in investigation state
+            # Record iteration
             # --------------------------------------------------
 
             investigation.record_iteration(
@@ -327,8 +363,7 @@ class CloudOperationsAgent:
             )
 
             # --------------------------------------------------
-            # No tool call means the LLM has enough
-            # information to produce the final answer.
+            # No tool call means final answer
             # --------------------------------------------------
 
             if not tool_calls:
@@ -443,6 +478,58 @@ class CloudOperationsAgent:
                     f"{len(investigation.evidence)}"
                 )
 
+                # ==================================================
+                # Analyze collected evidence
+                # ==================================================
+
+                findings = analyzer.analyze(
+                    investigation.evidence
+                )
+
+                # --------------------------------------------------
+                # Update investigation findings
+                # --------------------------------------------------
+
+                investigation.findings = []
+
+                for finding in findings:
+
+                    investigation.add_finding(
+                        finding
+                    )
+
+                print(
+                    "\n[Investigation Analysis]"
+                )
+
+                print(
+                    f"Findings Generated: "
+                    f"{len(investigation.findings)}"
+                )
+
+                for finding in (
+                    investigation.findings
+                ):
+
+                    print(
+                        f"- {finding}"
+                    )
+
+                # --------------------------------------------------
+                # Build investigation context
+                # --------------------------------------------------
+
+                investigation_context = {
+                    "investigation_findings": (
+                        investigation.findings
+                    ),
+                    "evidence_count": (
+                        len(
+                            investigation.evidence
+                        )
+                    ),
+                }
+
                 # --------------------------------------------------
                 # Convert tool result into
                 # Cohere-compatible tool content.
@@ -453,14 +540,20 @@ class CloudOperationsAgent:
                         "type": "document",
                         "document": {
                             "data": json.dumps(
-                                result
+                                {
+                                    "tool_result": result,
+                                    "investigation_analysis": (
+                                        investigation_context
+                                    ),
+                                }
                             )
                         },
                     }
                 ]
 
                 # --------------------------------------------------
-                # Add tool result to conversation history.
+                # Add tool result and analysis
+                # to conversation history.
                 # --------------------------------------------------
 
                 messages.append(
@@ -474,7 +567,7 @@ class CloudOperationsAgent:
                 )
 
         # ==================================================
-        # Step 6: Safety Stop
+        # Step 7: Safety Stop
         # ==================================================
 
         print(
@@ -494,6 +587,11 @@ class CloudOperationsAgent:
         print(
             f"Evidence Items: "
             f"{len(investigation.evidence)}"
+        )
+
+        print(
+            f"Findings: "
+            f"{len(investigation.findings)}"
         )
 
         return (
