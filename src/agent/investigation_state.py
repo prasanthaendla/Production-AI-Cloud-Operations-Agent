@@ -10,7 +10,16 @@ class InvestigationState:
     """
     Represents the state of one cloud investigation.
 
-    The state is intentionally simple for now.
+    The state tracks:
+
+    - User question
+    - Selected capability
+    - Agent iterations
+    - Tool calls
+    - Evidence
+    - Findings
+    - Hypotheses
+
     Later this can evolve into a structured state model
     when we introduce LangGraph.
     """
@@ -35,6 +44,12 @@ class InvestigationState:
         self.evidence = []
 
         self.findings = []
+
+        # --------------------------------------------------
+        # Hypothesis tracking
+        # --------------------------------------------------
+
+        self.hypotheses = []
 
     # --------------------------------------------------
     # Iteration tracking
@@ -109,6 +124,22 @@ class InvestigationState:
         )
 
     # --------------------------------------------------
+    # Hypotheses
+    # --------------------------------------------------
+
+    def add_hypothesis(
+        self,
+        hypothesis,
+    ):
+        """
+        Add an investigation hypothesis.
+        """
+
+        self.hypotheses.append(
+            hypothesis
+        )
+
+    # --------------------------------------------------
     # Summary
     # --------------------------------------------------
 
@@ -124,4 +155,5 @@ class InvestigationState:
             "tool_calls": self.tool_calls,
             "evidence": self.evidence,
             "findings": self.findings,
+            "hypotheses": self.hypotheses,
         }

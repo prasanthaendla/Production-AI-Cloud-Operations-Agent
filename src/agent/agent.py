@@ -1,18 +1,19 @@
 """
 AI Cloud Operations Agent
 
-Phase 9:
-Multi-step tool-calling agent with:
+Multi-step cloud operations investigation agent with:
 
-- semantic scope guardrails
-- capability-aware routing
-- structured investigation state
-- tool calling
-- evidence tracking
-- deterministic investigation analysis
+- Semantic scope guardrails
+- Capability-aware routing
+- Investigation state
+- Tool calling
+- Evidence tracking
+- Deterministic investigation analysis
+- Hypothesis generation
+- Evidence-driven additional tool selection
 
-The implementation intentionally avoids LangGraph
-so that the underlying agent loop is understood first.
+Root cause assessment will be integrated only after
+this investigation loop is verified end-to-end.
 """
 
 import json
@@ -42,36 +43,56 @@ from src.agent.investigation_analyzer import (
     InvestigationAnalyzer,
 )
 
+from src.agent.hypothesis_engine import (
+    HypothesisEngine,
+)
+
 
 class CloudOperationsAgent:
     """
     Multi-step AI Cloud Operations Agent.
 
-    Responsibilities:
+    Investigation flow:
 
-    1. Semantic scope validation
-    2. Capability routing
-    3. Investigation state management
-    4. Tool selection
-    5. Tool execution
-    6. Evidence collection
-    7. Evidence analysis
-    8. Finding generation
-    9. Final investigation response
+        Question
+            ↓
+        Semantic Guardrail
+            ↓
+        Capability Router
+            ↓
+        Investigation State
+            ↓
+        Initial Tool
+            ↓
+        Evidence
+            ↓
+        Investigation Analyzer
+            ↓
+        Findings
+            ↓
+        Hypothesis Engine
+            ↓
+        Evidence Recommendations
+            ↓
+        Additional Tools
+            ↓
+        Additional Evidence
+            ↓
+        Final Answer
     """
 
-    # Maximum number of LLM/tool interaction cycles.
     MAX_ITERATIONS = 5
 
     def __init__(self):
-        """
-        Initialize the Cloud Operations Agent.
-        """
+
+        # --------------------------------------------------
+        # LLM
+        # --------------------------------------------------
 
         self.llm = CohereClient()
 
         # --------------------------------------------------
-        # Semantic scope classifier
+        # Guardrail
         # --------------------------------------------------
 
         self.scope_classifier = (
@@ -79,7 +100,7 @@ class CloudOperationsAgent:
         )
 
         # --------------------------------------------------
-        # Capability router
+        # Capability Router
         # --------------------------------------------------
 
         self.capability_router = (
@@ -87,47 +108,32 @@ class CloudOperationsAgent:
         )
 
         # --------------------------------------------------
-        # Investigation analyzer
+        # Investigation Analyzer
         # --------------------------------------------------
 
         self.investigation_analyzer = (
             InvestigationAnalyzer()
         )
 
+        # --------------------------------------------------
+        # Hypothesis Engine
+        # --------------------------------------------------
+
+        self.hypothesis_engine = (
+            HypothesisEngine()
+        )
+
+    # ======================================================
+    # MAIN AGENT
+    # ======================================================
+
     def run(
         self,
         question: str,
     ):
-        """
-        Process a user question.
-
-        Processing flow:
-
-        User Question
-              ↓
-        Semantic Scope Guardrail
-              ↓
-        Capability Router
-              ↓
-        Investigation State
-              ↓
-        Agent Loop
-              ↓
-        Tool Execution
-              ↓
-        Evidence
-              ↓
-        Investigation Analyzer
-              ↓
-        Findings
-              ↓
-        Agent Loop
-              ↓
-        Final Answer
-        """
 
         # ==================================================
-        # Step 1: Semantic Scope Guardrail
+        # 1. Semantic Guardrail
         # ==================================================
 
         classification = (
@@ -159,10 +165,6 @@ class CloudOperationsAgent:
                 f"{classification['matched_domain']}"
             )
 
-        # --------------------------------------------------
-        # Reject out-of-scope requests
-        # --------------------------------------------------
-
         if not classification[
             "is_cloud_operations"
         ]:
@@ -184,7 +186,7 @@ class CloudOperationsAgent:
         )
 
         # ==================================================
-        # Step 2: Capability Routing
+        # 2. Capability Router
         # ==================================================
 
         capability = (
@@ -217,24 +219,20 @@ class CloudOperationsAgent:
             f"{capability['margin']}"
         )
 
-        # --------------------------------------------------
-        # Reject unsupported capabilities
-        # --------------------------------------------------
-
         if not capability[
             "is_supported"
         ]:
 
             print(
                 "\n[Capability Router] "
-                "Request cannot be handled by "
-                "the currently available capabilities."
+                "Request cannot be handled."
             )
 
             return (
-                "This is related to cloud, but I don't "
-                "currently have the capability or tools "
-                "required to answer this question."
+                "This is related to cloud operations, "
+                "but I don't currently have the "
+                "capability or tools required to "
+                "answer this question."
             )
 
         print(
@@ -244,7 +242,7 @@ class CloudOperationsAgent:
         )
 
         # ==================================================
-        # Step 3: Create Investigation State
+        # 3. Investigation State
         # ==================================================
 
         investigation = InvestigationState(
@@ -264,13 +262,7 @@ class CloudOperationsAgent:
         )
 
         # ==================================================
-        # Step 4: Create Investigation Analyzer
-        # ==================================================
-
-        analyzer = self.investigation_analyzer
-
-        # ==================================================
-        # Step 5: Conversation History
+        # 4. Conversation
         # ==================================================
 
         messages = [
@@ -278,43 +270,17 @@ class CloudOperationsAgent:
                 "role": "system",
                 "content": (
                     "You are an AI Cloud Operations Agent. "
-
-                    "Your responsibility is to investigate "
-                    "cloud infrastructure and application "
-                    "operations using the available tools. "
-
-                    "Supported areas include cloud "
-                    "infrastructure, AWS, Azure, GCP, "
-                    "Kubernetes, Docker, networking, "
-                    "monitoring, application health, "
-                    "logs, deployments, incidents, "
-                    "performance and troubleshooting. "
-
-                    "Do not invent infrastructure metrics. "
-
-                    "Use tools when factual infrastructure "
-                    "information is required. "
-
-                    "When investigating an incident, use "
-                    "additional tools when the available "
-                    "evidence is not sufficient to answer "
-                    "the user's question confidently. "
-
-                    "Use investigation findings as "
-                    "supporting evidence when they are "
-                    "provided. "
-
-                    "Do not treat a finding as proof of "
-                    "root cause unless the available "
-                    "evidence supports that conclusion. "
-
-                    "Only answer the user's question using "
-                    "available knowledge, tool results, "
-                    "and investigation findings. "
-
-                    "Do not claim to have performed an "
-                    "operation unless an available tool "
-                    "actually performed that operation."
+                    "Investigate cloud infrastructure and "
+                    "application incidents using the "
+                    "available tools. "
+                    "Use tools when infrastructure evidence "
+                    "is required. "
+                    "Do not invent metrics or tool results. "
+                    "When the available evidence is "
+                    "insufficient, continue investigating "
+                    "using appropriate available tools. "
+                    "Do not stop after the first tool call "
+                    "when additional evidence is required."
                 ),
             },
             {
@@ -324,17 +290,13 @@ class CloudOperationsAgent:
         ]
 
         # ==================================================
-        # Step 6: Multi-step Agent Loop
+        # 5. Investigation Loop
         # ==================================================
 
         for iteration in range(
             1,
             self.MAX_ITERATIONS + 1,
         ):
-
-            # --------------------------------------------------
-            # Record iteration
-            # --------------------------------------------------
 
             investigation.record_iteration(
                 iteration
@@ -346,7 +308,7 @@ class CloudOperationsAgent:
             )
 
             # --------------------------------------------------
-            # Ask the LLM what to do next
+            # Ask LLM
             # --------------------------------------------------
 
             response = self.llm.chat(
@@ -354,19 +316,124 @@ class CloudOperationsAgent:
                 tools=TOOLS,
             )
 
-            # --------------------------------------------------
-            # Check whether the LLM requested tools
-            # --------------------------------------------------
-
             tool_calls = (
                 response.message.tool_calls
             )
 
-            # --------------------------------------------------
-            # No tool call means final answer
-            # --------------------------------------------------
+            # ==================================================
+            # If LLM wants to finish, check whether
+            # investigation still requires validation.
+            # ==================================================
 
             if not tool_calls:
+
+                # ----------------------------------------------
+                # Check current hypotheses
+                # ----------------------------------------------
+
+                hypotheses = getattr(
+                    investigation,
+                    "hypotheses",
+                    [],
+                )
+
+                recommended_evidence = (
+                    self.hypothesis_engine
+                    .get_recommended_evidence(
+                        hypotheses
+                    )
+                )
+
+                # ----------------------------------------------
+                # Determine tools already executed
+                # ----------------------------------------------
+
+                executed_tools = {
+                    call.get("tool")
+                    for call in (
+                        investigation.tool_calls
+                        if isinstance(
+                            investigation.tool_calls,
+                            list,
+                        )
+                        else []
+                    )
+                }
+
+                evidence_tool_mapping = {
+                    "application_logs":
+                        "get_application_logs",
+
+                    "deployments":
+                        "get_recent_deployments",
+                }
+
+                missing_validation_tools = []
+
+                for evidence_type in (
+                    recommended_evidence
+                ):
+
+                    tool_name = (
+                        evidence_tool_mapping.get(
+                            evidence_type
+                        )
+                    )
+
+                    if (
+                        tool_name
+                        and tool_name
+                        not in executed_tools
+                    ):
+
+                        missing_validation_tools.append(
+                            tool_name
+                        )
+
+                if missing_validation_tools:
+
+                    print(
+                        "\n[Evidence Validation]"
+                    )
+
+                    print(
+                        "LLM attempted to finish "
+                        "while validation evidence "
+                        "is still missing."
+                    )
+
+                    print(
+                        "Requesting additional "
+                        "investigation."
+                    )
+
+                    # ------------------------------------------
+                    # Tell LLM that validation is required
+                    # ------------------------------------------
+
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Additional investigation "
+                                "is required before answering. "
+                                "The following validation tools "
+                                "have not yet been executed: "
+                                + ", ".join(
+                                    missing_validation_tools
+                                )
+                                + ". "
+                                "Use the appropriate tools "
+                                "to collect this evidence."
+                            ),
+                        }
+                    )
+
+                    continue
+
+                # ----------------------------------------------
+                # Investigation complete
+                # ----------------------------------------------
 
                 print(
                     "\n[Investigation State]"
@@ -392,23 +459,24 @@ class CloudOperationsAgent:
                     f"{len(investigation.findings)}"
                 )
 
+                print(
+                    f"Hypotheses: "
+                    f"{len(hypotheses)}"
+                )
+
                 return (
                     response.message
                     .content[0]
                     .text
                 )
 
-            # --------------------------------------------------
-            # Add assistant tool-call message
-            # --------------------------------------------------
+            # ==================================================
+            # 6. Process Tool Calls
+            # ==================================================
 
             messages.append(
                 response.message
             )
-
-            # --------------------------------------------------
-            # Execute requested tools
-            # --------------------------------------------------
 
             for tool_call in tool_calls:
 
@@ -432,18 +500,18 @@ class CloudOperationsAgent:
                     f"{json.dumps(arguments)}"
                 )
 
-                # --------------------------------------------------
-                # Record requested tool call
-                # --------------------------------------------------
+                # ----------------------------------------------
+                # Record tool call
+                # ----------------------------------------------
 
                 investigation.record_tool_call(
                     tool_name=tool_name,
                     arguments=arguments,
                 )
 
-                # --------------------------------------------------
-                # Execute actual Python tool
-                # --------------------------------------------------
+                # ----------------------------------------------
+                # Execute tool
+                # ----------------------------------------------
 
                 result = execute_tool(
                     tool_name,
@@ -455,9 +523,9 @@ class CloudOperationsAgent:
                     f"{json.dumps(result)}"
                 )
 
-                # --------------------------------------------------
-                # Record investigation evidence
-                # --------------------------------------------------
+                # ----------------------------------------------
+                # Record evidence
+                # ----------------------------------------------
 
                 investigation.record_evidence(
                     tool_name=tool_name,
@@ -479,16 +547,20 @@ class CloudOperationsAgent:
                 )
 
                 # ==================================================
-                # Analyze collected evidence
+                # 7. Analyze Evidence
                 # ==================================================
 
-                findings = analyzer.analyze(
-                    investigation.evidence
+                findings = (
+                    self.investigation_analyzer
+                    .analyze(
+                        investigation.evidence
+                    )
                 )
 
-                # --------------------------------------------------
-                # Update investigation findings
-                # --------------------------------------------------
+                # ----------------------------------------------
+                # Replace findings with current deterministic
+                # analysis
+                # ----------------------------------------------
 
                 investigation.findings = []
 
@@ -515,25 +587,176 @@ class CloudOperationsAgent:
                         f"- {finding}"
                     )
 
-                # --------------------------------------------------
-                # Build investigation context
-                # --------------------------------------------------
+                # ==================================================
+                # 8. Generate Hypotheses
+                # ==================================================
 
-                investigation_context = {
-                    "investigation_findings": (
+                hypotheses = (
+                    self.hypothesis_engine.generate(
                         investigation.findings
-                    ),
-                    "evidence_count": (
-                        len(
-                            investigation.evidence
+                    )
+                )
+
+                # ----------------------------------------------
+                # Store hypotheses
+                # ----------------------------------------------
+
+                if hasattr(
+                    investigation,
+                    "hypotheses",
+                ):
+
+                    investigation.hypotheses = (
+                        hypotheses
+                    )
+
+                print(
+                    "\n[Hypothesis Analysis]"
+                )
+
+                print(
+                    f"Hypotheses Generated: "
+                    f"{len(hypotheses)}"
+                )
+
+                for hypothesis in hypotheses:
+
+                    if isinstance(
+                        hypothesis,
+                        dict,
+                    ):
+
+                        print(
+                            "- "
+                            + str(
+                                hypothesis.get(
+                                    "hypothesis",
+                                    hypothesis,
+                                )
+                            )
                         )
-                    ),
+
+                    else:
+
+                        print(
+                            f"- {hypothesis}"
+                        )
+
+                # ==================================================
+                # 9. Evidence-Driven Investigation
+                # ==================================================
+
+                recommended_evidence = (
+                    self.hypothesis_engine
+                    .get_recommended_evidence(
+                        hypotheses
+                    )
+                )
+
+                evidence_tool_mapping = {
+                    "application_logs":
+                        "get_application_logs",
+
+                    "deployments":
+                        "get_recent_deployments",
                 }
 
-                # --------------------------------------------------
-                # Convert tool result into
-                # Cohere-compatible tool content.
-                # --------------------------------------------------
+                executed_tools = set()
+
+                for call in (
+                    investigation.tool_calls
+                ):
+
+                    if isinstance(
+                        call,
+                        dict,
+                    ):
+
+                        tool_name_from_call = (
+                            call.get("tool")
+                        )
+
+                        if tool_name_from_call:
+
+                            executed_tools.add(
+                                tool_name_from_call
+                            )
+
+                missing_validation_tools = []
+
+                for evidence_type in (
+                    recommended_evidence
+                ):
+
+                    tool_name_for_evidence = (
+                        evidence_tool_mapping.get(
+                            evidence_type
+                        )
+                    )
+
+                    if (
+                        tool_name_for_evidence
+                        and tool_name_for_evidence
+                        not in executed_tools
+                    ):
+
+                        missing_validation_tools.append(
+                            tool_name_for_evidence
+                        )
+
+                if missing_validation_tools:
+
+                    print(
+                        "\n[Evidence-Driven Investigation]"
+                    )
+
+                    print(
+                        "Additional validation tools "
+                        "required: "
+                        f"{missing_validation_tools}"
+                    )
+
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Continue the investigation. "
+                                "The evidence currently "
+                                "collected is not sufficient "
+                                "to validate the hypotheses. "
+                                "Use these additional tools "
+                                "where appropriate: "
+                                + ", ".join(
+                                    missing_validation_tools
+                                )
+                            ),
+                        }
+                    )
+
+                else:
+
+                    print(
+                        "\n[Evidence-Driven Investigation]"
+                    )
+
+                    print(
+                        "No additional validation "
+                        "tools required."
+                    )
+
+                # ==================================================
+                # 10. Add Tool Result + Investigation Context
+                # ==================================================
+
+                investigation_context = {
+                    "findings": (
+                        investigation.findings
+                    ),
+                    "hypotheses": hypotheses,
+                    "recommended_evidence": (
+                        recommended_evidence
+                    ),
+                }
 
                 tool_content = [
                     {
@@ -551,11 +774,6 @@ class CloudOperationsAgent:
                     }
                 ]
 
-                # --------------------------------------------------
-                # Add tool result and analysis
-                # to conversation history.
-                # --------------------------------------------------
-
                 messages.append(
                     {
                         "role": "tool",
@@ -567,7 +785,7 @@ class CloudOperationsAgent:
                 )
 
         # ==================================================
-        # Step 7: Safety Stop
+        # 11. Maximum Iteration Safety Stop
         # ==================================================
 
         print(
@@ -594,9 +812,19 @@ class CloudOperationsAgent:
             f"{len(investigation.findings)}"
         )
 
+        hypotheses = getattr(
+            investigation,
+            "hypotheses",
+            [],
+        )
+
+        print(
+            f"Hypotheses: "
+            f"{len(hypotheses)}"
+        )
+
         return (
-            "I was unable to complete the investigation "
-            "within the allowed number of tool-calling "
-            "iterations. Please try the question again "
-            "with more specific information."
+            "I was unable to complete the cloud "
+            "operations investigation within the "
+            "maximum investigation iterations."
         )
