@@ -375,6 +375,7 @@ class SemanticScopeClassifier:
         for index, prototype_embedding in enumerate(
             prototype_embeddings
         ):
+
             similarity = (
                 self._cosine_similarity(
                     question_embedding,
@@ -477,14 +478,14 @@ class SemanticScopeClassifier:
         # ========================================================
         # DECISION LOGIC
         # ========================================================
-        #
+
         # A request is considered Cloud Operations when:
-        #
+
         # 1. Positive similarity is sufficiently strong.
-        #
+
         # 2. The strongest positive domain is sufficiently
         #    stronger than the strongest negative domain.
-        #
+
         # This prevents unrelated questions from being accepted
         # merely because they have some semantic relationship
         # with cloud technology.
