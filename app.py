@@ -2,9 +2,13 @@
 AI Cloud Operations Agent
 
 Phase 1 command-line application.
+
+The application entry point uses LangGraph as the
+orchestration layer while preserving the existing
+CloudOperationsAgent components.
 """
 
-from src.agent.agent import CloudOperationsAgent
+from src.agent.langgraph_workflow import CloudOperationsLangGraph
 
 
 def main():
@@ -13,19 +17,27 @@ def main():
     print("AI CLOUD OPERATIONS AGENT")
     print("=" * 60)
 
-    agent = CloudOperationsAgent()
+    graph = CloudOperationsLangGraph()
 
     question = input(
         "\nEnter your question: "
     )
 
-    answer = agent.run(question)
+    result = graph.run(question)
 
     print("\n" + "=" * 60)
     print("AGENT ANSWER")
     print("=" * 60)
 
-    print(answer)
+    if result.get("status") == "completed":
+        print(result.get("final_answer", "No final answer generated."))
+    else:
+        print(
+            result.get(
+                "error",
+                "The investigation could not be completed.",
+            )
+        )
 
 
 if __name__ == "__main__":
