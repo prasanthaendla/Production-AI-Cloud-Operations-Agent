@@ -17,10 +17,11 @@ outside the Cloud Operations Agent.
 """
 
 import math
-import os
 from typing import Any, Optional
 
 import cohere
+
+from src.config import settings
 
 
 class SemanticScopeClassifier:
@@ -228,7 +229,7 @@ class SemanticScopeClassifier:
 
             margin_threshold:
                 Minimum difference required between the strongest
-                positive and strongest negative semantic matches.
+                positive and strongest negative semantic match.
 
             client:
                 Optional embedding client.
@@ -244,13 +245,9 @@ class SemanticScopeClassifier:
 
         if client is None:
 
-            api_key = os.getenv("COHERE_API_KEY")
+            settings.validate()
 
-            if not api_key:
-                raise ValueError(
-                    "COHERE_API_KEY environment variable "
-                    "is not configured."
-                )
+            api_key = settings.cohere_api_key
 
             self.client = cohere.ClientV2(
                 api_key=api_key
@@ -370,7 +367,10 @@ class SemanticScopeClassifier:
 
         return (
             dot_product
-            / (magnitude_a * magnitude_b)
+            / (
+                magnitude_a
+                * magnitude_b
+            )
         )
 
     def _calculate_similarities(
@@ -421,20 +421,6 @@ class SemanticScopeClassifier:
         """
         Classify a user question using positive and
         negative semantic similarity.
-
-        Returns:
-
-            {
-                "is_cloud_operations": bool,
-                "category": str,
-                "confidence": float,
-                "matched_domain": str,
-                "positive_similarity": float,
-                "negative_similarity": float,
-                "margin": float,
-                "positive_similarities": [...],
-                "negative_similarities": [...]
-            }
         """
 
         if not question or not question.strip():
@@ -488,10 +474,6 @@ class SemanticScopeClassifier:
             - negative_similarity,
             4,
         )
-
-        # ========================================================
-        # DECISION LOGIC
-        # ========================================================
 
         is_cloud_operations = (
             positive_similarity

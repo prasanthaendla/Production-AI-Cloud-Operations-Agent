@@ -4,13 +4,9 @@ Cohere LLM Client
 Handles communication with the Cohere API.
 """
 
-import os
-
 import cohere
-from dotenv import load_dotenv
 
-
-load_dotenv()
+from src.config import settings
 
 
 class CohereClient:
@@ -19,12 +15,9 @@ class CohereClient:
     """
 
     def __init__(self):
-        api_key = os.getenv("COHERE_API_KEY")
+        settings.validate()
 
-        if not api_key:
-            raise ValueError(
-                "COHERE_API_KEY is not configured."
-            )
+        api_key = settings.cohere_api_key
 
         self.client = cohere.ClientV2(
             api_key=api_key
@@ -38,8 +31,6 @@ class CohereClient:
         tools=None,
     ):
         """
-        Send a chat request to Cohere.
-
         Args:
             messages: Conversation messages.
             tools: Optional tool definitions.

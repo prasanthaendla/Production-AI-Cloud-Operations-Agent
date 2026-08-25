@@ -11,7 +11,6 @@ capability.
 """
 
 import math
-import os
 from typing import Any, Optional
 
 import cohere
@@ -19,6 +18,7 @@ import cohere
 from src.agent.capabilities import (
     get_capability_descriptions,
 )
+from src.config import settings
 
 
 class CapabilityRouter:
@@ -66,15 +66,9 @@ class CapabilityRouter:
 
         if client is None:
 
-            api_key = os.getenv(
-                "COHERE_API_KEY"
-            )
+            settings.validate()
 
-            if not api_key:
-                raise ValueError(
-                    "COHERE_API_KEY environment variable "
-                    "is not configured."
-                )
+            api_key = settings.cohere_api_key
 
             self.client = cohere.ClientV2(
                 api_key=api_key
