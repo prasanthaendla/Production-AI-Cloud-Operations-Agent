@@ -18,6 +18,7 @@ outside the Cloud Operations Agent.
 
 import math
 import os
+from typing import Any, Optional
 
 import cohere
 
@@ -216,6 +217,7 @@ class SemanticScopeClassifier:
         self,
         positive_threshold: float = 0.25,
         margin_threshold: float = 0.03,
+        client: Optional[Any] = None,
     ):
         """
         Initialize the semantic classifier.
@@ -228,22 +230,34 @@ class SemanticScopeClassifier:
                 Minimum difference required between the strongest
                 positive and strongest negative semantic matches.
 
-        These values are calibration values and should be changed
-        only after evaluating the classifier against a representative
-        test dataset.
+            client:
+                Optional embedding client.
+
+                Production:
+                    Leave as None and the classifier creates
+                    the real Cohere client.
+
+                Tests:
+                    Inject a mock client to avoid external
+                    Cohere API calls.
         """
 
-        api_key = os.getenv("COHERE_API_KEY")
+        if client is None:
 
-        if not api_key:
-            raise ValueError(
-                "COHERE_API_KEY environment variable "
-                "is not configured."
+            api_key = os.getenv("COHERE_API_KEY")
+
+            if not api_key:
+                raise ValueError(
+                    "COHERE_API_KEY environment variable "
+                    "is not configured."
+                )
+
+            self.client = cohere.ClientV2(
+                api_key=api_key
             )
 
-        self.client = cohere.ClientV2(
-            api_key=api_key
-        )
+        else:
+            self.client = client
 
         self.positive_threshold = positive_threshold
         self.margin_threshold = margin_threshold
@@ -477,18 +491,6 @@ class SemanticScopeClassifier:
 
         # ========================================================
         # DECISION LOGIC
-        # ========================================================
-
-        # A request is considered Cloud Operations when:
-
-        # 1. Positive similarity is sufficiently strong.
-
-        # 2. The strongest positive domain is sufficiently
-        #    stronger than the strongest negative domain.
-
-        # This prevents unrelated questions from being accepted
-        # merely because they have some semantic relationship
-        # with cloud technology.
         # ========================================================
 
         is_cloud_operations = (

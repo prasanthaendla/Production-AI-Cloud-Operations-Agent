@@ -109,6 +109,8 @@ from src.memory.incident_memory import (
     IncidentMemory,
 )
 
+from src.observability.tracer import InvestigationTracer
+
 
 class CloudInvestigationGraphState(TypedDict, total=False):
     """
@@ -153,6 +155,9 @@ class CloudInvestigationGraphState(TypedDict, total=False):
     final_answer: str
 
     pending_tool_calls: List[Dict[str, Any]]
+
+    trace_summary: Dict[str, Any]
+    trace_events: List[Dict[str, Any]]
 
 
 class CloudOperationsLangGraph:
@@ -227,6 +232,8 @@ class CloudOperationsLangGraph:
             or IncidentMemory()
         )
 
+        self.tracer = InvestigationTracer()
+
         self.graph = self._build_graph()
 
     # ==============================================================
@@ -241,47 +248,74 @@ class CloudOperationsLangGraph:
 
         workflow.add_node(
             "initialize",
-            self._initialize,
+            self._trace_node(
+                "initialize",
+                self._initialize,
+            ),
         )
 
         workflow.add_node(
             "investigate",
-            self._investigate,
+            self._trace_node(
+                "investigate",
+                self._investigate,
+            ),
         )
 
         workflow.add_node(
             "execute_tools",
-            self._execute_tools,
+            self._trace_node(
+                "execute_tools",
+                self._execute_tools,
+            ),
         )
 
         workflow.add_node(
             "analyze_evidence",
-            self._analyze_evidence,
+            self._trace_node(
+                "analyze_evidence",
+                self._analyze_evidence,
+            ),
         )
 
         workflow.add_node(
             "decide_next",
-            self._decide_next,
+            self._trace_node(
+                "decide_next",
+                self._decide_next,
+            ),
         )
 
         workflow.add_node(
             "assess_root_cause",
-            self._assess_root_cause,
+            self._trace_node(
+                "assess_root_cause",
+                self._assess_root_cause,
+            ),
         )
 
         workflow.add_node(
             "assess_confidence",
-            self._assess_confidence,
+            self._trace_node(
+                "assess_confidence",
+                self._assess_confidence,
+            ),
         )
 
         workflow.add_node(
             "generate_answer",
-            self._generate_answer,
+            self._trace_node(
+                "generate_answer",
+                self._generate_answer,
+            ),
         )
 
         workflow.add_node(
             "save_memory",
-            self._save_memory,
+            self._trace_node(
+                "save_memory",
+                self._save_memory,
+            ),
         )
 
         workflow.add_edge(
@@ -349,6 +383,47 @@ class CloudOperationsLangGraph:
         )
 
         return workflow.compile()
+
+    def _trace_node(
+        self,
+        node_name: str,
+        node_function,
+    ):
+        """Wrap a LangGraph node with Stage 17 tracing."""
+
+        def traced_node(
+            state: CloudInvestigationGraphState,
+        ) -> Dict[str, Any]:
+
+            start_time = self.tracer.node_started(
+                node_name,
+                iteration=state.get("iteration"),
+            )
+
+            try:
+                result = node_function(state)
+                self.tracer.node_completed(
+                    node_name,
+                    start_time,
+                    status=result.get(
+                        "status",
+                        "completed",
+                    ),
+                )
+                return result
+            except Exception as exc:
+                self.tracer.error(
+                    node_name,
+                    exc,
+                )
+                self.tracer.node_completed(
+                    node_name,
+                    start_time,
+                    status="failed",
+                )
+                raise
+
+        return traced_node
 
     # ==============================================================
     # INITIALIZE
@@ -867,10 +942,31 @@ class CloudOperationsLangGraph:
                 arguments=arguments,
             )
 
-            result = execute_tool(
+            tool_start_time = self.tracer.tool_started(
                 tool_name,
                 arguments,
             )
+
+            try:
+                result = execute_tool(
+                    tool_name,
+                    arguments,
+                )
+                self.tracer.tool_completed(
+                    tool_name,
+                    tool_start_time,
+                )
+            except Exception as exc:
+                self.tracer.error(
+                    f"tool:{tool_name}",
+                    exc,
+                )
+                self.tracer.tool_completed(
+                    tool_name,
+                    tool_start_time,
+                    status="failed",
+                )
+                raise
 
             print(
                 f"[Tool Result] "
@@ -881,6 +977,11 @@ class CloudOperationsLangGraph:
                 tool_name=tool_name,
                 arguments=arguments,
                 result=result,
+            )
+
+            self.tracer.evidence_recorded(
+                tool_name,
+                len(all_evidence) + 1,
             )
 
             all_tool_calls.append(
@@ -1248,6 +1349,12 @@ class CloudOperationsLangGraph:
                 "Maximum iterations reached."
             )
 
+            self.tracer.decision(
+                decision="root_cause",
+                reason="Maximum investigation iterations reached.",
+                iteration=iteration,
+            )
+
             return {
                 "next_action": "root_cause",
                 "status": "root_cause_ready",
@@ -1262,6 +1369,12 @@ class CloudOperationsLangGraph:
             print(
                 "Decision: additional "
                 "evidence required."
+            )
+
+            self.tracer.decision(
+                decision="investigate",
+                reason="Additional validation tools are required.",
+                iteration=iteration,
             )
 
             pending_tool_calls = []
@@ -1310,6 +1423,12 @@ class CloudOperationsLangGraph:
 
         print(
             "Decision: evidence sufficient."
+        )
+
+        self.tracer.decision(
+            decision="root_cause",
+            reason="Evidence is sufficient for root-cause assessment.",
+            iteration=iteration,
         )
 
         return {
@@ -1824,9 +1943,54 @@ class CloudOperationsLangGraph:
             "max_iterations": max_iterations,
         }
 
-        return self.graph.invoke(
-            initial_state
+        self.tracer.start_run(
+            question=question,
+            capability=capability,
         )
+
+        try:
+            result = self.graph.invoke(
+                initial_state
+            )
+            self.tracer.end_run(
+                result.get(
+                    "status",
+                    "completed",
+                )
+            )
+        except Exception as exc:
+            self.tracer.error(
+                "langgraph_run",
+                exc,
+            )
+            self.tracer.end_run("failed")
+            raise
+
+        result["trace_summary"] = self.tracer.summary()
+        result["trace_events"] = self.tracer.get_events()
+
+        print("\n[Observability Summary]")
+        print(
+            f"Run ID: {result['trace_summary']['run_id']}"
+        )
+        print(
+            f"Events: {result['trace_summary']['event_count']}"
+        )
+        print(
+            f"Nodes: {result['trace_summary']['node_count']}"
+        )
+        print(
+            f"Tools: {result['trace_summary']['tool_count']}"
+        )
+        print(
+            f"Errors: {result['trace_summary']['error_count']}"
+        )
+        print(
+            "Node Duration (ms): "
+            f"{result['trace_summary']['total_node_duration_ms']}"
+        )
+
+        return result
 
 
 def create_cloud_operations_graph(

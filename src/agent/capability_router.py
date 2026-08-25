@@ -12,6 +12,7 @@ capability.
 
 import math
 import os
+from typing import Any, Optional
 
 import cohere
 
@@ -23,12 +24,20 @@ from src.agent.capabilities import (
 class CapabilityRouter:
     """
     Semantic router for supported agent capabilities.
+
+    Production:
+        Uses the real Cohere client.
+
+    Testing:
+        A mock/injected client can be supplied so that
+        unit tests do not call the Cohere API.
     """
 
     def __init__(
         self,
         threshold: float = 0.35,
         margin_threshold: float = 0.03,
+        client: Optional[Any] = None,
     ):
         """
         Initialize the capability router.
@@ -42,23 +51,40 @@ class CapabilityRouter:
                 Minimum separation required between
                 the best capability and the second-best
                 capability.
+
+            client:
+                Optional embedding client.
+
+                Production:
+                    Leave as None and the router creates
+                    the real Cohere client.
+
+                Tests:
+                    Inject a mock client to avoid external
+                    API calls.
         """
 
-        api_key = os.getenv(
-            "COHERE_API_KEY"
-        )
+        if client is None:
 
-        if not api_key:
-            raise ValueError(
-                "COHERE_API_KEY environment variable "
-                "is not configured."
+            api_key = os.getenv(
+                "COHERE_API_KEY"
             )
 
-        self.client = cohere.ClientV2(
-            api_key=api_key
-        )
+            if not api_key:
+                raise ValueError(
+                    "COHERE_API_KEY environment variable "
+                    "is not configured."
+                )
+
+            self.client = cohere.ClientV2(
+                api_key=api_key
+            )
+
+        else:
+            self.client = client
 
         self.threshold = threshold
+
         self.margin_threshold = (
             margin_threshold
         )
