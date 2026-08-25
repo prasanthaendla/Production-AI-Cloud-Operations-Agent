@@ -54,6 +54,10 @@ from src.agent.confidence_engine import (
     ConfidenceEngine,
 )
 
+from src.knowledge.knowledge_retriever import (
+    KnowledgeRetriever,
+)
+
 
 class CloudOperationsAgent:
     """
@@ -120,6 +124,10 @@ class CloudOperationsAgent:
 
         self.confidence_engine = (
             ConfidenceEngine()
+        )
+
+        self.knowledge_retriever = (
+            KnowledgeRetriever()
         )
 
     # ======================================================
@@ -261,6 +269,34 @@ class CloudOperationsAgent:
         )
 
         # ==================================================
+        # 3.5 Operational Knowledge Retrieval
+        # ==================================================
+
+        knowledge_results = (
+            self.knowledge_retriever.retrieve_for_investigation(
+                query=question,
+                findings=investigation.findings,
+                evidence=investigation.evidence,
+                top_k=3,
+            )
+        )
+
+        print(
+            "\n[Operational Knowledge]"
+        )
+
+        print(
+            "Relevant documents: "
+            f"{len(knowledge_results)}"
+        )
+
+        for knowledge in knowledge_results:
+            print(
+                f"- {knowledge['source']} "
+                f"(score={knowledge['score']})"
+            )
+
+        # ==================================================
         # 4. Conversation
         # ==================================================
 
@@ -282,8 +318,15 @@ class CloudOperationsAgent:
                     "when additional evidence is required. "
                     "Use the investigation findings, "
                     "hypotheses, root cause assessment, "
-                    "and confidence assessment when "
-                    "producing the final answer."
+                    "confidence assessment, and relevant "
+                    "operational knowledge when producing "
+                    "the final answer. "
+                    "Operational knowledge provides "
+                    "guidance and context only. "
+                    "Do not treat a runbook recommendation "
+                    "as proof of root cause. "
+                    "Always prioritize actual cloud evidence "
+                    "collected by investigation tools."
                 ),
             },
             {
@@ -575,6 +618,19 @@ class CloudOperationsAgent:
                             + json.dumps(
                                 confidence_result
                             )
+                            + "\n\n"
+                            "OPERATIONAL KNOWLEDGE:\n"
+                            + json.dumps(
+                                [
+                                    {
+                                        "source": knowledge["source"],
+                                        "content": knowledge["content"],
+                                        "score": knowledge["score"],
+                                    }
+                                    for knowledge
+                                    in knowledge_results
+                                ]
+                            )
                         ),
                     }
                 )
@@ -721,6 +777,34 @@ class CloudOperationsAgent:
                     )
 
                 # ==================================================
+                # Evidence-Aware Knowledge Refresh
+                # ==================================================
+
+                knowledge_results = (
+                    self.knowledge_retriever.retrieve_for_investigation(
+                        query=question,
+                        findings=investigation.findings,
+                        evidence=investigation.evidence,
+                        top_k=3,
+                    )
+                )
+
+                print(
+                    "\n[Evidence-Aware Knowledge]"
+                )
+
+                print(
+                    "Relevant documents: "
+                    f"{len(knowledge_results)}"
+                )
+
+                for knowledge in knowledge_results:
+                    print(
+                        f"- {knowledge['source']} "
+                        f"(score={knowledge['score']})"
+                    )
+
+                # ==================================================
                 # Hypothesis Analysis
                 # ==================================================
 
@@ -863,6 +947,21 @@ class CloudOperationsAgent:
                     "recommended_evidence": (
                         recommended_evidence
                     ),
+                    "operational_knowledge": [
+                        {
+                            "source": (
+                                knowledge["source"]
+                            ),
+                            "content": (
+                                knowledge["content"]
+                            ),
+                            "score": (
+                                knowledge["score"]
+                            ),
+                        }
+                        for knowledge
+                        in knowledge_results
+                    ],
                 }
 
                 tool_content = [
