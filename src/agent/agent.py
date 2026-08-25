@@ -58,6 +58,10 @@ from src.knowledge.knowledge_retriever import (
     KnowledgeRetriever,
 )
 
+from src.memory.incident_memory import (
+    IncidentMemory,
+)
+
 
 class CloudOperationsAgent:
     """
@@ -128,6 +132,10 @@ class CloudOperationsAgent:
 
         self.knowledge_retriever = (
             KnowledgeRetriever()
+        )
+
+        self.incident_memory = (
+            IncidentMemory()
         )
 
     # ======================================================
@@ -297,6 +305,34 @@ class CloudOperationsAgent:
             )
 
         # ==================================================
+        # 3.6 Historical Incident Memory
+        # ==================================================
+
+        historical_incidents = (
+            self.incident_memory.retrieve_similar(
+                question=question,
+                findings=investigation.findings,
+                capability=investigation.capability,
+                top_k=3,
+            )
+        )
+
+        print(
+            "\n[Historical Incident Memory]"
+        )
+
+        print(
+            "Similar historical incidents: "
+            f"{len(historical_incidents)}"
+        )
+
+        for incident in historical_incidents:
+            print(
+                f"- {incident['incident_id']} "
+                f"(score={incident['similarity_score']})"
+            )
+
+        # ==================================================
         # 4. Conversation
         # ==================================================
 
@@ -326,7 +362,10 @@ class CloudOperationsAgent:
                     "Do not treat a runbook recommendation "
                     "as proof of root cause. "
                     "Always prioritize actual cloud evidence "
-                    "collected by investigation tools."
+                    "collected by investigation tools. "
+                    "Historical incidents provide context only. "
+                    "Never treat historical incidents as proof "
+                    "of the current root cause."
                 ),
             },
             {
@@ -631,6 +670,11 @@ class CloudOperationsAgent:
                                     in knowledge_results
                                 ]
                             )
+                            + "\n\n"
+                            "HISTORICAL INCIDENTS:\n"
+                            + json.dumps(
+                                historical_incidents
+                            )
                         ),
                     }
                 )
@@ -667,6 +711,35 @@ class CloudOperationsAgent:
                 print(
                     f"Hypotheses: "
                     f"{len(hypotheses)}"
+                )
+
+                saved_incident = (
+                    self.incident_memory.save_incident(
+                        question=question,
+                        capability=investigation.capability,
+                        findings=investigation.findings,
+                        hypotheses=hypotheses,
+                        root_cause_assessment=(
+                            root_cause_result
+                        ),
+                        confidence_assessment=(
+                            confidence_result
+                        ),
+                    )
+                )
+
+                print(
+                    "\n[Historical Incident Memory]"
+                )
+
+                print(
+                    "Incident saved: "
+                    f"{saved_incident['incident_id']}"
+                )
+
+                print(
+                    "Total historical incidents: "
+                    f"{self.incident_memory.count()}"
                 )
 
                 return (
@@ -962,6 +1035,9 @@ class CloudOperationsAgent:
                         for knowledge
                         in knowledge_results
                     ],
+                    "historical_incidents": (
+                        historical_incidents
+                    ),
                 }
 
                 tool_content = [

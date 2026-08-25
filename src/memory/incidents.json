@@ -1,0 +1,90 @@
+[
+  {
+    "incident_id": "INC-00001",
+    "timestamp": "2026-08-25T04:23:13.444944+00:00",
+    "question": "Why is instance i-demo-001 unhealthy?",
+    "capability": "instance_health",
+    "findings": [
+      "High CPU utilization detected: 92.4%.",
+      "High memory utilization detected: 81.7%.",
+      "Instance health is degraded.",
+      "Application status is unhealthy."
+    ],
+    "hypotheses": [
+      {
+        "hypothesis": "Resource saturation may be contributing to application degradation.",
+        "confidence": "medium",
+        "supporting_findings": [
+          "High CPU utilization detected: 92.4%.",
+          "High memory utilization detected: 81.7%.",
+          "Application status is unhealthy."
+        ],
+        "requires_validation": true,
+        "recommended_evidence": [
+          "application_logs",
+          "deployments"
+        ]
+      },
+      {
+        "hypothesis": "The degraded instance health may be contributing to the observed incident.",
+        "confidence": "medium",
+        "supporting_findings": [
+          "Instance health is degraded."
+        ],
+        "requires_validation": true,
+        "recommended_evidence": [
+          "application_logs",
+          "deployments"
+        ]
+      }
+    ],
+    "root_cause": "Resource saturation may be contributing to application degradation.",
+    "root_cause_score": 4,
+    "confidence_level": "HIGH",
+    "confidence_score": 0.9
+  },
+  {
+    "incident_id": "INC-00002",
+    "timestamp": "2026-08-25T04:24:08.757568+00:00",
+    "question": "Why is instance i-demo-001 unhealthy?",
+    "capability": "instance_health",
+    "findings": [
+      "High CPU utilization detected: 92.4%.",
+      "High memory utilization detected: 81.7%.",
+      "Instance health is degraded.",
+      "Application status is unhealthy."
+    ],
+    "hypotheses": [
+      {
+        "hypothesis": "Resource saturation may be contributing to application degradation.",
+        "confidence": "medium",
+        "supporting_findings": [
+          "High CPU utilization detected: 92.4%.",
+          "High memory utilization detected: 81.7%.",
+          "Application status is unhealthy."
+        ],
+        "requires_validation": true,
+        "recommended_evidence": [
+          "application_logs",
+          "deployments"
+        ]
+      },
+      {
+        "hypothesis": "The degraded instance health may be contributing to the observed incident.",
+        "confidence": "medium",
+        "supporting_findings": [
+          "Instance health is degraded."
+        ],
+        "requires_validation": true,
+        "recommended_evidence": [
+          "application_logs",
+          "deployments"
+        ]
+      }
+    ],
+    "root_cause": "Resource saturation may be contributing to application degradation.",
+    "root_cause_score": 4,
+    "confidence_level": "HIGH",
+    "confidence_score": 0.9
+  }
+]
