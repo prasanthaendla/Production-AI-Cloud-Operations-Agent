@@ -5,44 +5,39 @@ Uses Cohere embeddings to determine whether a user
 question belongs to the supported Cloud Operations
 domain.
 
-The classifier uses positive and negative semantic
-intent prototypes rather than maintaining a large
-keyword or question list.
-
-Positive prototypes represent common Cloud Operations
-intents.
-
-Negative prototypes represent domains that should remain
-outside the Cloud Operations Agent.
+Stage 18:
+- Centralized configuration.
+- Retry handling for transient Cohere embedding failures.
+- Exponential backoff.
+- Optional client injection for testing.
 """
+
+from __future__ import annotations
 
 import math
 from typing import Any, Optional
 
 import cohere
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.config import settings
+
+from cohere.errors import (
+    InternalServerError,
+    ServiceUnavailableError,
+    TooManyRequestsError,
+)
 
 
 class SemanticScopeClassifier:
     """
     Semantic classifier for the Cloud Operations Agent.
-
-    The classifier compares a user's question against:
-
-    1. Positive Cloud Operations intent prototypes.
-    2. Negative out-of-scope prototypes.
-
-    The final decision uses:
-
-    - Positive semantic similarity.
-    - Negative semantic similarity.
-    - Semantic margin between positive and negative scores.
     """
-
-    # ============================================================
-    # POSITIVE CLOUD OPERATIONS INTENT PROTOTYPES
-    # ============================================================
 
     CLOUD_DOMAIN_PROTOTYPES = [
         (
@@ -143,10 +138,6 @@ class SemanticScopeClassifier:
         ),
     ]
 
-    # ============================================================
-    # NEGATIVE OUT-OF-SCOPE DOMAIN PROTOTYPES
-    # ============================================================
-
     OUT_OF_SCOPE_PROTOTYPES = [
         (
             "general programming",
@@ -222,42 +213,26 @@ class SemanticScopeClassifier:
     ):
         """
         Initialize the semantic classifier.
-
-        Args:
-            positive_threshold:
-                Minimum positive semantic similarity required.
-
-            margin_threshold:
-                Minimum difference required between the strongest
-                positive and strongest negative semantic match.
-
-            client:
-                Optional embedding client.
-
-                Production:
-                    Leave as None and the classifier creates
-                    the real Cohere client.
-
-                Tests:
-                    Inject a mock client to avoid external
-                    Cohere API calls.
         """
 
         if client is None:
 
             settings.validate()
 
-            api_key = settings.cohere_api_key
-
             self.client = cohere.ClientV2(
-                api_key=api_key
+                api_key=settings.cohere_api_key
             )
 
         else:
             self.client = client
 
-        self.positive_threshold = positive_threshold
-        self.margin_threshold = margin_threshold
+        self.positive_threshold = (
+            positive_threshold
+        )
+
+        self.margin_threshold = (
+            margin_threshold
+        )
 
         self.positive_names = [
             name
@@ -291,22 +266,53 @@ class SemanticScopeClassifier:
             )
         )
 
-    def _create_embeddings(
+    @retry(
+        retry=retry_if_exception_type(
+            (
+                TooManyRequestsError,
+                InternalServerError,
+                ServiceUnavailableError,
+            )
+        ),
+        wait=wait_exponential(
+            multiplier=1,
+            min=1,
+            max=8,
+        ),
+        stop=stop_after_attempt(3),
+        reraise=True,
+    )
+    def _embed(
         self,
         texts,
     ):
         """
-        Generate embeddings for a collection of
-        semantic prototype descriptions.
+        Generate Cohere embeddings with retry handling.
+
+        Retries transient API failures:
+
+        - HTTP 429 Too Many Requests
+        - HTTP 500 Internal Server Error
+        - HTTP 503 Service Unavailable
         """
 
-        response = self.client.embed(
+        return self.client.embed(
             model="embed-v4.0",
             texts=texts,
             input_type="classification",
             output_dimension=1024,
             embedding_types=["float"],
         )
+
+    def _create_embeddings(
+        self,
+        texts,
+    ):
+        """
+        Generate embeddings for semantic prototypes.
+        """
+
+        response = self._embed(texts)
 
         return response.embeddings.float
 
@@ -318,13 +324,7 @@ class SemanticScopeClassifier:
         Generate an embedding for the user's question.
         """
 
-        response = self.client.embed(
-            model="embed-v4.0",
-            texts=[question],
-            input_type="classification",
-            output_dimension=1024,
-            embedding_types=["float"],
-        )
+        response = self._embed([question])
 
         return response.embeddings.float[0]
 
@@ -423,7 +423,10 @@ class SemanticScopeClassifier:
         negative semantic similarity.
         """
 
-        if not question or not question.strip():
+        if (
+            not question
+            or not question.strip()
+        ):
             return {
                 "is_cloud_operations": False,
                 "category": "OUT_OF_SCOPE",

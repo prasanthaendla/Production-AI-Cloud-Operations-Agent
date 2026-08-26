@@ -1,11 +1,14 @@
 """
 LangGraph orchestration for the AI Cloud Operations Agent.
 
-Stage 16 - Real Node-Level Orchestration
+Stage 18 - Production Hardening
 
 Architecture:
 
     Question
+       |
+       v
+    Boundary Validation
        |
        v
     Guardrail
@@ -55,6 +58,7 @@ Important:
 - CloudOperationsAgent.run() is NOT called from this workflow.
 - Existing guardrails, router, analyzer, hypothesis engine,
   root-cause assessor, confidence engine, RAG and memory are reused.
+- Public API validation happens before LangGraph execution.
 """
 
 from __future__ import annotations
@@ -159,6 +163,8 @@ class CloudInvestigationGraphState(TypedDict, total=False):
     trace_summary: Dict[str, Any]
     trace_events: List[Dict[str, Any]]
 
+    tool_failures: List[Dict[str, Any]]
+
 
 class CloudOperationsLangGraph:
     """
@@ -176,6 +182,9 @@ class CloudOperationsLangGraph:
     """
 
     DEFAULT_MAX_ITERATIONS = 5
+
+    MIN_MAX_ITERATIONS = 1
+    MAX_MAX_ITERATIONS = 10
 
     def __init__(
         self,
@@ -389,7 +398,9 @@ class CloudOperationsLangGraph:
         node_name: str,
         node_function,
     ):
-        """Wrap a LangGraph node with Stage 17 tracing."""
+        """
+        Wrap a LangGraph node with observability tracing.
+        """
 
         def traced_node(
             state: CloudInvestigationGraphState,
@@ -401,7 +412,11 @@ class CloudOperationsLangGraph:
             )
 
             try:
-                result = node_function(state)
+
+                result = node_function(
+                    state
+                )
+
                 self.tracer.node_completed(
                     node_name,
                     start_time,
@@ -410,17 +425,22 @@ class CloudOperationsLangGraph:
                         "completed",
                     ),
                 )
+
                 return result
+
             except Exception as exc:
+
                 self.tracer.error(
                     node_name,
                     exc,
                 )
+
                 self.tracer.node_completed(
                     node_name,
                     start_time,
                     status="failed",
                 )
+
                 raise
 
         return traced_node
@@ -450,7 +470,9 @@ class CloudOperationsLangGraph:
                 "next_action": "complete",
             }
 
-        print("\n[LangGraph Node] initialize")
+        print(
+            "\n[LangGraph Node] initialize"
+        )
 
         # ----------------------------------------------------------
         # Semantic Guardrail
@@ -701,6 +723,7 @@ class CloudOperationsLangGraph:
             "recommended_evidence": [],
             "missing_validation_tools": [],
             "pending_tool_calls": [],
+            "tool_failures": [],
             "status": "initialized",
             "next_action": "investigate",
         }
@@ -714,7 +737,10 @@ class CloudOperationsLangGraph:
         state: CloudInvestigationGraphState,
     ) -> str:
 
-        if state.get("status") == "failed":
+        if state.get(
+            "status"
+        ) == "failed":
+
             return "complete"
 
         return "investigate"
@@ -728,7 +754,9 @@ class CloudOperationsLangGraph:
         state: CloudInvestigationGraphState,
     ) -> Dict[str, Any]:
 
-        if state.get("status") == "failed":
+        if state.get(
+            "status"
+        ) == "failed":
 
             return {
                 "next_action": "complete",
@@ -853,7 +881,10 @@ class CloudOperationsLangGraph:
         state: CloudInvestigationGraphState,
     ) -> str:
 
-        if state.get("status") == "failed":
+        if state.get(
+            "status"
+        ) == "failed":
+
             return "complete"
 
         action = state.get(
@@ -877,6 +908,20 @@ class CloudOperationsLangGraph:
         self,
         state: CloudInvestigationGraphState,
     ) -> Dict[str, Any]:
+        """
+        Execute pending tools without allowing one tool failure to
+        terminate the complete investigation.
+
+        Stage 18 production-hardening behavior:
+        - Successful tools produce normal evidence.
+        - Failed tools are recorded as structured evidence.
+        - The tracer records the failure.
+        - The LLM receives the failure as a tool result.
+        - The workflow continues to evidence analysis.
+
+        This prevents transient cloud/API/tool failures from causing
+        the complete LangGraph invocation to crash.
+        """
 
         investigation = state[
             "investigation"
@@ -904,6 +949,13 @@ class CloudOperationsLangGraph:
         all_evidence = list(
             state.get(
                 "evidence",
+                [],
+            )
+        )
+
+        tool_failures = list(
+            state.get(
+                "tool_failures",
                 [],
             )
         )
@@ -952,74 +1004,169 @@ class CloudOperationsLangGraph:
                     tool_name,
                     arguments,
                 )
+
                 self.tracer.tool_completed(
                     tool_name,
                     tool_start_time,
                 )
+
+                print(
+                    f"[Tool Result] "
+                    f"{json.dumps(result)}"
+                )
+
+                investigation.record_evidence(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    result=result,
+                )
+
+                self.tracer.evidence_recorded(
+                    tool_name,
+                    len(all_evidence) + 1,
+                )
+
+                all_tool_calls.append(
+                    {
+                        "tool": tool_name,
+                        "arguments": arguments,
+                        "result": result,
+                        "status": "success",
+                    }
+                )
+
+                all_evidence.append(
+                    {
+                        "tool": tool_name,
+                        "arguments": arguments,
+                        "result": result,
+                        "status": "success",
+                    }
+                )
+
+                tool_content = [
+                    {
+                        "type": "document",
+                        "document": {
+                            "data": json.dumps(
+                                {
+                                    "tool_result": result,
+                                }
+                            ),
+                        },
+                    }
+                ]
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": tool_content,
+                    }
+                )
+
             except Exception as exc:
+                # --------------------------------------------------
+                # Production-safe tool failure handling
+                # --------------------------------------------------
+
+                error_message = str(exc).strip() or (
+                    exc.__class__.__name__
+                )
+
+                failure_result = {
+                    "tool_error": True,
+                    "tool": tool_name,
+                    "error_type": exc.__class__.__name__,
+                    "error": error_message,
+                    "message": (
+                        "Tool execution failed. "
+                        "Do not invent the missing result."
+                    ),
+                }
+
                 self.tracer.error(
                     f"tool:{tool_name}",
                     exc,
                 )
+
                 self.tracer.tool_completed(
                     tool_name,
                     tool_start_time,
                     status="failed",
                 )
-                raise
 
-            print(
-                f"[Tool Result] "
-                f"{json.dumps(result)}"
-            )
+                print(
+                    f"[Tool Error] {tool_name}: "
+                    f"{error_message}"
+                )
 
-            investigation.record_evidence(
-                tool_name=tool_name,
-                arguments=arguments,
-                result=result,
-            )
-
-            self.tracer.evidence_recorded(
-                tool_name,
-                len(all_evidence) + 1,
-            )
-
-            all_tool_calls.append(
-                {
+                failure_record = {
                     "tool": tool_name,
                     "arguments": arguments,
-                    "result": result,
+                    "error_type": exc.__class__.__name__,
+                    "error": error_message,
                 }
-            )
 
-            all_evidence.append(
-                {
-                    "tool": tool_name,
-                    "arguments": arguments,
-                    "result": result,
-                }
-            )
+                tool_failures.append(
+                    failure_record
+                )
 
-            tool_content = [
-                {
-                    "type": "document",
-                    "document": {
-                        "data": json.dumps(
-                            {
-                                "tool_result": result,
-                            }
-                        ),
-                    },
-                }
-            ]
+                # Record the failure as evidence so downstream nodes
+                # know exactly which evidence could not be collected.
+                investigation.record_evidence(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    result=failure_result,
+                )
 
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": tool_content,
-                }
-            )
+                self.tracer.evidence_recorded(
+                    tool_name,
+                    len(all_evidence) + 1,
+                )
+
+                all_tool_calls.append(
+                    {
+                        "tool": tool_name,
+                        "arguments": arguments,
+                        "result": failure_result,
+                        "status": "failed",
+                    }
+                )
+
+                all_evidence.append(
+                    {
+                        "tool": tool_name,
+                        "arguments": arguments,
+                        "result": failure_result,
+                        "status": "failed",
+                    }
+                )
+
+                tool_content = [
+                    {
+                        "type": "document",
+                        "document": {
+                            "data": json.dumps(
+                                {
+                                    "tool_result": failure_result,
+                                }
+                            ),
+                        },
+                    }
+                ]
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": tool_content,
+                    }
+                )
+
+                # Continue with any remaining tools. A failure in one
+                # tool must not prevent independent tools from running.
+                continue
 
         print(
             "\n[Evidence Recorded]"
@@ -1030,12 +1177,23 @@ class CloudOperationsLangGraph:
             f"{len(all_evidence)}"
         )
 
+        if tool_failures:
+            print(
+                "Tool Failures: "
+                f"{len(tool_failures)}"
+            )
+
         return {
             "messages": messages,
             "tool_calls": all_tool_calls,
             "evidence": all_evidence,
+            "tool_failures": tool_failures,
             "pending_tool_calls": [],
-            "status": "evidence_collected",
+            "status": (
+                "tool_execution_completed_with_errors"
+                if tool_failures
+                else "evidence_collected"
+            ),
             "next_action": "analyze",
         }
 
@@ -1057,6 +1215,11 @@ class CloudOperationsLangGraph:
             [],
         )
 
+        tool_failures = state.get(
+            "tool_failures",
+            [],
+        )
+
         question = state[
             "question"
         ]
@@ -1075,6 +1238,16 @@ class CloudOperationsLangGraph:
                 evidence
             )
         )
+
+        # Explicitly surface tool failures as findings. This prevents
+        # downstream reasoning from treating missing evidence as proof
+        # that the underlying condition is healthy.
+        for failure in tool_failures:
+            findings.append(
+                "Tool execution failed for "
+                f"{failure['tool']}: "
+                f"{failure['error']}"
+            )
 
         investigation.findings = []
 
@@ -1247,6 +1420,7 @@ class CloudOperationsLangGraph:
                 investigation.findings
             ),
             "hypotheses": hypotheses,
+            "tool_failures": tool_failures,
             "recommended_evidence": (
                 recommended_evidence
             ),
@@ -1351,7 +1525,10 @@ class CloudOperationsLangGraph:
 
             self.tracer.decision(
                 decision="root_cause",
-                reason="Maximum investigation iterations reached.",
+                reason=(
+                    "Maximum investigation "
+                    "iterations reached."
+                ),
                 iteration=iteration,
             )
 
@@ -1373,7 +1550,10 @@ class CloudOperationsLangGraph:
 
             self.tracer.decision(
                 decision="investigate",
-                reason="Additional validation tools are required.",
+                reason=(
+                    "Additional validation tools "
+                    "are required."
+                ),
                 iteration=iteration,
             )
 
@@ -1394,6 +1574,7 @@ class CloudOperationsLangGraph:
                 arguments = {}
 
                 if instance_id:
+
                     arguments[
                         "instance_id"
                     ] = instance_id
@@ -1427,7 +1608,10 @@ class CloudOperationsLangGraph:
 
         self.tracer.decision(
             decision="root_cause",
-            reason="Evidence is sufficient for root-cause assessment.",
+            reason=(
+                "Evidence is sufficient for "
+                "root-cause assessment."
+            ),
             iteration=iteration,
         )
 
@@ -1704,6 +1888,11 @@ class CloudOperationsLangGraph:
             [],
         )
 
+        tool_failures = state.get(
+            "tool_failures",
+            [],
+        )
+
         evidence = state.get(
             "evidence",
             [],
@@ -1729,6 +1918,7 @@ class CloudOperationsLangGraph:
             "findings": findings,
             "hypotheses": hypotheses,
             "evidence": evidence,
+            "tool_failures": tool_failures,
             "root_cause_assessment": root_cause,
             "confidence_assessment": confidence,
             "operational_knowledge": knowledge,
@@ -1751,7 +1941,11 @@ class CloudOperationsLangGraph:
                     "historical incidents. "
                     "Clearly distinguish evidence from "
                     "inference. "
-                    "Mention confidence and uncertainty."
+                    "Mention confidence and uncertainty. "
+                    "If any tool failed, explicitly state which "
+                    "evidence was unavailable and do not claim "
+                    "that the missing evidence was negative or "
+                    "successful."
                 ),
             }
         )
@@ -1936,6 +2130,79 @@ class CloudOperationsLangGraph:
         capability: str = "",
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
     ) -> CloudInvestigationGraphState:
+        """
+        Execute a complete cloud operations investigation.
+
+        Production boundary validation is performed before
+        LangGraph execution begins.
+
+        Args:
+            question:
+                User's investigation question.
+
+            capability:
+                Optional capability hint.
+
+            max_iterations:
+                Maximum number of investigation iterations.
+                Must be between 1 and 10.
+
+        Returns:
+            Final LangGraph investigation state.
+
+        Raises:
+            ValueError:
+                If the question is empty or max_iterations
+                is outside the supported range.
+        """
+
+        # ----------------------------------------------------------
+        # Production boundary validation
+        # ----------------------------------------------------------
+
+        if not isinstance(
+            question,
+            str,
+        ):
+
+            raise ValueError(
+                "Investigation question "
+                "must be a string."
+            )
+
+        question = question.strip()
+
+        if not question:
+
+            raise ValueError(
+                "Investigation question "
+                "cannot be empty."
+            )
+
+        if not isinstance(
+            max_iterations,
+            int,
+        ):
+
+            raise ValueError(
+                "max_iterations "
+                "must be an integer."
+            )
+
+        if not (
+            self.MIN_MAX_ITERATIONS
+            <= max_iterations
+            <= self.MAX_MAX_ITERATIONS
+        ):
+
+            raise ValueError(
+                "max_iterations must be "
+                "between 1 and 10."
+            )
+
+        # ----------------------------------------------------------
+        # Initial state
+        # ----------------------------------------------------------
 
         initial_state: CloudInvestigationGraphState = {
             "question": question,
@@ -1943,48 +2210,82 @@ class CloudOperationsLangGraph:
             "max_iterations": max_iterations,
         }
 
+        # ----------------------------------------------------------
+        # Start observability only after validation
+        # ----------------------------------------------------------
+
         self.tracer.start_run(
             question=question,
             capability=capability,
         )
 
         try:
+
             result = self.graph.invoke(
                 initial_state
             )
+
             self.tracer.end_run(
                 result.get(
                     "status",
                     "completed",
                 )
             )
+
         except Exception as exc:
+
             self.tracer.error(
                 "langgraph_run",
                 exc,
             )
-            self.tracer.end_run("failed")
+
+            self.tracer.end_run(
+                "failed"
+            )
+
             raise
 
-        result["trace_summary"] = self.tracer.summary()
-        result["trace_events"] = self.tracer.get_events()
+        # ----------------------------------------------------------
+        # Attach observability information
+        # ----------------------------------------------------------
 
-        print("\n[Observability Summary]")
+        result[
+            "trace_summary"
+        ] = self.tracer.summary()
+
+        result[
+            "trace_events"
+        ] = self.tracer.get_events()
+
         print(
-            f"Run ID: {result['trace_summary']['run_id']}"
+            "\n[Observability Summary]"
         )
+
         print(
-            f"Events: {result['trace_summary']['event_count']}"
+            f"Run ID: "
+            f"{result['trace_summary']['run_id']}"
         )
+
         print(
-            f"Nodes: {result['trace_summary']['node_count']}"
+            f"Events: "
+            f"{result['trace_summary']['event_count']}"
         )
+
         print(
-            f"Tools: {result['trace_summary']['tool_count']}"
+            f"Nodes: "
+            f"{result['trace_summary']['node_count']}"
         )
+
         print(
-            f"Errors: {result['trace_summary']['error_count']}"
+            f"Tools: "
+            f"{result['trace_summary']['tool_count']}"
         )
+
+        print(
+            f"Errors: "
+            f"{result['trace_summary']['error_count']}"
+        )
+
         print(
             "Node Duration (ms): "
             f"{result['trace_summary']['total_node_duration_ms']}"

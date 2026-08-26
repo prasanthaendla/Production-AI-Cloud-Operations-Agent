@@ -8,29 +8,42 @@ Operations Agent.
 The router uses semantic similarity plus a confidence
 margin between the strongest and second-strongest
 capability.
+
+Stage 18:
+- Centralized configuration.
+- Retry handling for transient Cohere embedding failures.
+- Exponential backoff.
+- Optional client injection for testing.
 """
+
+from __future__ import annotations
 
 import math
 from typing import Any, Optional
 
 import cohere
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.agent.capabilities import (
     get_capability_descriptions,
 )
 from src.config import settings
 
+from cohere.errors import (
+    InternalServerError,
+    ServiceUnavailableError,
+    TooManyRequestsError,
+)
+
 
 class CapabilityRouter:
     """
     Semantic router for supported agent capabilities.
-
-    Production:
-        Uses the real Cohere client.
-
-    Testing:
-        A mock/injected client can be supplied so that
-        unit tests do not call the Cohere API.
     """
 
     def __init__(
@@ -53,25 +66,21 @@ class CapabilityRouter:
                 capability.
 
             client:
-                Optional embedding client.
+                Optional Cohere client.
 
                 Production:
-                    Leave as None and the router creates
-                    the real Cohere client.
+                    Leave as None.
 
                 Tests:
-                    Inject a mock client to avoid external
-                    API calls.
+                    Inject a mock client.
         """
 
         if client is None:
 
             settings.validate()
 
-            api_key = settings.cohere_api_key
-
             self.client = cohere.ClientV2(
-                api_key=api_key
+                api_key=settings.cohere_api_key
             )
 
         else:
@@ -99,17 +108,51 @@ class CapabilityRouter:
             self._create_prototype_embeddings()
         )
 
+    @retry(
+        retry=retry_if_exception_type(
+            (
+                TooManyRequestsError,
+                InternalServerError,
+                ServiceUnavailableError,
+            )
+        ),
+        wait=wait_exponential(
+            multiplier=1,
+            min=1,
+            max=8,
+        ),
+        stop=stop_after_attempt(3),
+        reraise=True,
+    )
+    def _embed(
+        self,
+        texts,
+    ):
+        """
+        Generate Cohere embeddings with retry handling.
+
+        Retries transient API failures:
+
+        - HTTP 429 Too Many Requests
+        - HTTP 500 Internal Server Error
+        - HTTP 503 Service Unavailable
+        """
+
+        return self.client.embed(
+            model="embed-v4.0",
+            texts=texts,
+            input_type="classification",
+            output_dimension=1024,
+            embedding_types=["float"],
+        )
+
     def _create_prototype_embeddings(self):
         """
         Create embeddings for capability descriptions.
         """
 
-        response = self.client.embed(
-            model="embed-v4.0",
-            texts=self.prototype_descriptions,
-            input_type="classification",
-            output_dimension=1024,
-            embedding_types=["float"],
+        response = self._embed(
+            self.prototype_descriptions
         )
 
         return response.embeddings.float
@@ -122,12 +165,8 @@ class CapabilityRouter:
         Create an embedding for the user's question.
         """
 
-        response = self.client.embed(
-            model="embed-v4.0",
-            texts=[question],
-            input_type="classification",
-            output_dimension=1024,
-            embedding_types=["float"],
+        response = self._embed(
+            [question]
         )
 
         return response.embeddings.float[0]
