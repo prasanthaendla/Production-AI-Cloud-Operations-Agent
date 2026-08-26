@@ -14,11 +14,14 @@ Stage 18:
 - Retry handling for transient Cohere embedding failures.
 - Exponential backoff.
 - Optional client injection for testing.
+- Lightweight intent fallback for clear EC2
+  instance health/status questions.
 """
 
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Optional
 
 import cohere
@@ -108,6 +111,10 @@ class CapabilityRouter:
             self._create_prototype_embeddings()
         )
 
+    # ==============================================================
+    # EMBEDDINGS
+    # ==============================================================
+
     @retry(
         retry=retry_if_exception_type(
             (
@@ -171,6 +178,10 @@ class CapabilityRouter:
 
         return response.embeddings.float[0]
 
+    # ==============================================================
+    # SIMILARITY
+    # ==============================================================
+
     @staticmethod
     def _cosine_similarity(
         vector_a,
@@ -216,6 +227,87 @@ class CapabilityRouter:
             )
         )
 
+    # ==============================================================
+    # INSTANCE HEALTH INTENT
+    # ==============================================================
+
+    @staticmethod
+    def _is_instance_health_question(
+        question: str,
+    ) -> bool:
+        """
+        Detect clear EC2 instance health/status questions.
+
+        This is intentionally lightweight.
+
+        The semantic router remains the primary routing
+        mechanism. This fallback only handles obvious
+        instance-health questions that may receive a
+        low semantic margin because of wording differences.
+
+        Examples:
+
+            Why is instance i-123 unhealthy?
+            What is the status of EC2 instance i-123?
+            What is the health of instance i-123?
+            Is EC2 instance i-123 healthy?
+            Check the status of instance i-123.
+        """
+
+        normalized = question.lower().strip()
+
+        # ----------------------------------------------------------
+        # Require an EC2/instance reference
+        # ----------------------------------------------------------
+
+        has_instance_reference = bool(
+            re.search(
+                r"\bi-[a-z0-9]+\b",
+                normalized,
+            )
+        )
+
+        if not has_instance_reference:
+
+            return False
+
+        has_ec2_reference = (
+            "ec2" in normalized
+            or "instance" in normalized
+        )
+
+        if not has_ec2_reference:
+
+            return False
+
+        # ----------------------------------------------------------
+        # Health/status intent
+        # ----------------------------------------------------------
+
+        health_terms = (
+            "health",
+            "healthy",
+            "unhealthy",
+            "status",
+            "running",
+            "stopped",
+            "failed",
+            "failure",
+            "impaired",
+            "degraded",
+            "check",
+            "checks",
+        )
+
+        return any(
+            term in normalized
+            for term in health_terms
+        )
+
+    # ==============================================================
+    # ROUTING
+    # ==============================================================
+
     def route(
         self,
         question: str,
@@ -231,6 +323,13 @@ class CapabilityRouter:
                 "confidence": float,
                 "margin": float,
             }
+
+        The semantic router is used first.
+
+        A lightweight fallback is then used for
+        unambiguous EC2 instance-health/status questions
+        when semantic similarity alone is not sufficiently
+        separated.
         """
 
         if (
@@ -243,6 +342,10 @@ class CapabilityRouter:
                 "confidence": 0.0,
                 "margin": 0.0,
             }
+
+        # ----------------------------------------------------------
+        # Semantic routing
+        # ----------------------------------------------------------
 
         question_embedding = (
             self._create_question_embedding(
@@ -286,10 +389,13 @@ class CapabilityRouter:
         )
 
         if len(similarities) > 1:
+
             second_similarity = (
                 similarities[1]["similarity"]
             )
+
         else:
+
             second_similarity = 0.0
 
         margin = (
@@ -318,6 +424,41 @@ class CapabilityRouter:
                     4,
                 ),
             }
+
+        # ----------------------------------------------------------
+        # Lightweight EC2 instance-health fallback
+        # ----------------------------------------------------------
+        #
+        # If the semantic router cannot confidently separate
+        # capabilities but the question is clearly asking about
+        # the health/status of a specific EC2 instance, route it
+        # to the existing instance_health capability.
+        #
+
+        if (
+            "instance_health"
+            in self.capability_names
+            and self._is_instance_health_question(
+                question
+            )
+        ):
+
+            return {
+                "is_supported": True,
+                "capability": "instance_health",
+                "confidence": round(
+                    best_similarity,
+                    4,
+                ),
+                "margin": round(
+                    margin,
+                    4,
+                ),
+            }
+
+        # ----------------------------------------------------------
+        # Unsupported
+        # ----------------------------------------------------------
 
         return {
             "is_supported": False,
